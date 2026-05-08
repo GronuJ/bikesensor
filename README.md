@@ -32,10 +32,21 @@ Defaults: fs = 250 Hz, N = 10 samples/packet, ±4 g, ±500 °/s.
    speed, even though absolute lat/lon is bounded by phone-GPS noise (3–5 m).
 3. **STFT** with 0.5 s Hann window, 0.1 s hop → 0.5 m hop spacing at 5 m/s.
 
+## Firmware (PlatformIO)
+
+```bash
+pio run -d firmware              # build
+pio run -d firmware -t upload    # flash
+pio device monitor -b 115200     # serial debug
+```
+
+Source lives in `firmware/bikesensor/bikesensor.ino`; `firmware/platformio.ini`
+points at it via `src_dir = bikesensor`.
+
 ## Pipeline
 
 ```bash
-# 1. Flash firmware/bikesensor/bikesensor.ino to the ESP32.
+# 1. Flash the firmware (above).
 # 2. Record a ride: GPX on phone, LightBlue logging characteristic 0xFFE1.
 # 3. Export LightBlue log as CSV. Save GPX. Then:
 
