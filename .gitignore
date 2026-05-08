@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Ride data (not committed)
+data/
+*.gpx
+*.csv
+
+# OS
+.DS_Store
