@@ -1,75 +1,117 @@
 """
-Preliminary Streamlit dashboard for merged ride data.
+Dashboard: map heatmap of vibration band energy + click-to-see-spectrum.
 
-Run:
-    uv run streamlit run src/dashboard.py -- data/merged.csv
+    uv run streamlit run src/dashboard.py
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import folium
 import numpy as np
 import pandas as pd
-import pydeck as pdk
+import plotly.express as px
 import streamlit as st
+from folium.plugins import HeatMap
+from scipy.signal import detrend, get_window
+from streamlit_folium import st_folium
+
+DATA = Path("data")
 
 st.set_page_config(page_title="Bike Sensor", layout="wide")
 st.title("Bike vibration map")
 
-default = Path("data/merged.csv")
-path = Path(sys.argv[1]) if len(sys.argv) > 1 else default
-if not path.exists():
-    st.error(f"Merged CSV not found at {path}. Run src/merge.py first.")
+if not (DATA / "windows.csv").exists():
+    st.error("Run `uv run python src/merge.py <gpx> <lightblue.csv>` first.")
     st.stop()
 
-df = pd.read_csv(path, parse_dates=["timestamp"])
+windows = pd.read_csv(DATA / "windows.csv", parse_dates=["timestamp"])
+imu = pd.read_csv(DATA / "imu.csv", parse_dates=["timestamp"])
 
-# --- sidebar controls ---
 metric = st.sidebar.selectbox(
-    "Color metric", ["vib_rms_g", "vib_g", "speed_kmh", "accel_mag_g"], index=0
+    "Map metric",
+    ["band_mid_g", "band_low_g", "band_high_g", "rms_g", "speed_kmh", "peak_hz"],
+    index=0,
 )
-downsample = st.sidebar.slider("Downsample (every Nth point)", 1, 50, 5)
-df_plot = df.iloc[::downsample].copy()
+radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 10)
 
-# Map colors: low=green, high=red.
-v = df_plot[metric].to_numpy()
-v = np.clip((v - np.nanpercentile(v, 5)) /
-            (np.nanpercentile(v, 95) - np.nanpercentile(v, 5) + 1e-9), 0, 1)
-df_plot["r"] = (255 * v).astype(int)
-df_plot["g"] = (255 * (1 - v)).astype(int)
-df_plot["b"] = 60
+# --- KPIs ---
+duration_min = (windows["timestamp"].max() - windows["timestamp"].min()).total_seconds() / 60
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Duration (min)", f"{duration_min:.1f}")
+c2.metric("Distance (km)", f"{windows['cum_dist_m'].max() / 1000:.2f}")
+c3.metric("Avg speed (km/h)", f"{windows['speed_kmh'].mean():.1f}")
+c4.metric(f"Mean {metric}", f"{windows[metric].mean():.3f}")
+
+# --- map ---
+mid_lat, mid_lon = windows["lat"].mean(), windows["lon"].mean()
+m = folium.Map(location=[mid_lat, mid_lon], zoom_start=15, tiles="OpenStreetMap")
+
+# Folium track polyline (faint).
+folium.PolyLine(
+    list(zip(windows["lat"], windows["lon"], strict=True)),
+    weight=2, opacity=0.4, color="#444",
+).add_to(m)
+
+# Heatmap weighted by chosen metric (normalize to [0,1] for sane coloring).
+v = windows[metric].to_numpy()
+lo, hi = np.nanpercentile(v, [5, 95])
+w = np.clip((v - lo) / (hi - lo + 1e-9), 0, 1)
+HeatMap(
+    list(zip(windows["lat"], windows["lon"], w, strict=True)),
+    radius=radius, blur=radius, min_opacity=0.3,
+).add_to(m)
+
+# Clickable markers (sparse — every Nth window — to keep map snappy).
+stride = max(1, len(windows) // 400)
+for _, row in windows.iloc[::stride].iterrows():
+    folium.CircleMarker(
+        location=(row["lat"], row["lon"]), radius=3,
+        color=None, fill=True, fill_opacity=0.0,
+        tooltip=f"{row['timestamp']}<br>{metric}={row[metric]:.3f}<br>peak={row['peak_hz']:.1f} Hz",
+        popup=folium.Popup(f"{row['timestamp']}", show=False),
+    ).add_to(m)
 
 st.subheader("Map")
-midpoint = (df_plot["lat"].mean(), df_plot["lon"].mean())
-st.pydeck_chart(pdk.Deck(
-    map_style="road",
-    initial_view_state=pdk.ViewState(
-        latitude=midpoint[0], longitude=midpoint[1], zoom=14, pitch=0
-    ),
-    layers=[pdk.Layer(
-        "ScatterplotLayer",
-        data=df_plot,
-        get_position="[lon, lat]",
-        get_fill_color="[r, g, b, 180]",
-        get_radius=3,
-        pickable=True,
-    )],
-    tooltip={"text": f"{metric}: {{{metric}}}\nspeed: {{speed_kmh}} km/h"},
-))
+event = st_folium(m, height=550, width=None, returned_objects=["last_object_clicked"])
 
-# --- timeseries ---
-c1, c2, c3 = st.columns(3)
-c1.metric("Duration (min)", f"{(df['timestamp'].max() - df['timestamp'].min()).total_seconds()/60:.1f}")
-c2.metric("Avg speed (km/h)", f"{df['speed_kmh'].mean():.1f}")
-c3.metric("Mean vib RMS (g)", f"{df['vib_rms_g'].mean():.3f}")
+# --- spectrum on click (or default to loudest window) ---
+clicked = event.get("last_object_clicked") if event else None
+if clicked:
+    d = (windows["lat"] - clicked["lat"]) ** 2 + (windows["lon"] - clicked["lng"]) ** 2
+    sel = windows.loc[d.idxmin()]
+else:
+    sel = windows.loc[windows[metric].idxmax()]
 
-st.subheader("Vibration over time")
-st.line_chart(df.set_index("timestamp")[["vib_rms_g", "vib_g"]])
+st.subheader(f"Spectrum @ {sel['timestamp']} ({metric}={sel[metric]:.3f})")
 
-st.subheader("Speed and acceleration over time")
-st.line_chart(df.set_index("timestamp")[["speed_kmh", "accel_mag_g"]])
+fs = float(sel["fs_hz"]); win_n = int(sel["win_n"])
+center = pd.to_datetime(sel["timestamp"], utc=True)
+half = pd.Timedelta(seconds=win_n / fs / 2)
+seg_imu = imu[(imu["timestamp"] >= center - half) & (imu["timestamp"] <= center + half)]
 
-with st.expander("Raw data"):
-    st.dataframe(df.head(500))
+if len(seg_imu) >= 8:
+    sig = np.sqrt(seg_imu["ax"] ** 2 + seg_imu["ay"] ** 2 + seg_imu["az"] ** 2).to_numpy() - 1.0
+    sig = detrend(sig, type="constant")
+    n = len(sig); win = get_window("hann", n)
+    psd = (np.abs(np.fft.rfft(sig * win)) ** 2) / (fs * (win ** 2).sum())
+    psd[1:-1] *= 2
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    fig = px.line(x=freqs, y=np.sqrt(psd),
+                  labels={"x": "Frequency (Hz)", "y": "g / √Hz"},
+                  log_y=True)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Not enough IMU samples around this point.")
+
+# --- timeseries along distance ---
+st.subheader("Along the route")
+fig = px.line(windows, x="cum_dist_m",
+              y=["band_low_g", "band_mid_g", "band_high_g"],
+              labels={"cum_dist_m": "Distance (m)", "value": "g RMS"})
+st.plotly_chart(fig, use_container_width=True)
+
+fig2 = px.line(windows, x="cum_dist_m", y="speed_kmh",
+               labels={"cum_dist_m": "Distance (m)", "speed_kmh": "Speed (km/h)"})
+st.plotly_chart(fig2, use_container_width=True)

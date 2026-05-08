@@ -1,19 +1,15 @@
 """
-Merge a GPX track from your phone with vibration data from the ESP32/MPU-6050.
+Merge GPX track + IMU samples + STFT windows into one geo-tagged dataset.
 
-Strategy:
-  - Load GPX -> DataFrame of (timestamp, lat, lon, elevation).
-  - Compute speed (m/s) from successive GPS points (haversine / Δt).
-  - Load vibration CSV (timestamp, ax, ay, az, gx, gy, gz).
-  - Compute vibration magnitude = sqrt(ax² + ay² + az²) - 1g (gravity-removed),
-    plus a rolling RMS as a smoother "roughness" signal.
-  - Merge by nearest timestamp (vibration is high-rate, GPS ~1 Hz, so we
-    align each vibration sample to its closest GPS fix within a tolerance).
-  - Output one row per vibration sample with location, speed, vibration.
+Spatial-accuracy strategy: phone GPX is ~1 Hz, so we *interpolate* the
+track onto each FFT window's center timestamp rather than nearest-joining.
+At constant speed this gives sub-meter along-track accuracy even though
+absolute lat/lon is bounded by phone-GPS noise (~3–5 m).
 
-Why merge_asof + nearest: GPS and IMU clocks are independent and sampled
-at different rates. `merge_asof(direction="nearest")` is the standard
-pandas idiom for time-based joins; it's O(n+m) on sorted timestamps.
+Outputs:
+  data/imu.csv         per-sample IMU (from lightblue_parse)
+  data/windows.csv     one row per FFT window with location + band energies
+  data/track.csv       interpolated GPS for plotting
 """
 
 from __future__ import annotations
@@ -24,8 +20,11 @@ import gpxpy
 import numpy as np
 import pandas as pd
 
+from src.analysis import stft_features
+from src.lightblue_parse import parse as parse_lightblue
 
-def load_gpx(path: str | Path) -> pd.DataFrame:
+
+def _load_gpx(path: str | Path) -> pd.DataFrame:
     with open(path) as f:
         gpx = gpxpy.parse(f)
     rows = [
@@ -37,7 +36,7 @@ def load_gpx(path: str | Path) -> pd.DataFrame:
     return df.sort_values("timestamp").reset_index(drop=True)
 
 
-def haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
+def _haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
     R = 6371000.0
     lat1, lon1, lat2, lon2 = map(np.radians, (lat1, lon1, lat2, lon2))
     dlat, dlon = lat2 - lat1, lon2 - lon1
@@ -45,56 +44,55 @@ def haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
     return 2 * R * np.arcsin(np.sqrt(a))
 
 
-def add_speed(gps: pd.DataFrame) -> pd.DataFrame:
+def _enrich_track(gps: pd.DataFrame) -> pd.DataFrame:
     gps = gps.copy()
-    dt = gps["timestamp"].diff().dt.total_seconds()
-    dist = haversine_m(
-        gps["lat"].shift(), gps["lon"].shift(), gps["lat"], gps["lon"]
-    )
-    gps["speed_mps"] = (dist / dt).fillna(0.0)
+    seg = _haversine_m(gps["lat"].shift(), gps["lon"].shift(),
+                       gps["lat"], gps["lon"])
+    seg = np.nan_to_num(seg, nan=0.0)
+    gps["cum_dist_m"] = np.cumsum(seg)
+    dt = gps["timestamp"].diff().dt.total_seconds().fillna(1.0)
+    gps["speed_mps"] = (seg / dt).clip(lower=0)
     gps["speed_kmh"] = gps["speed_mps"] * 3.6
     return gps
 
 
-def add_vibration_features(vib: pd.DataFrame, rms_window: str = "500ms") -> pd.DataFrame:
-    vib = vib.sort_values("timestamp").copy()
-    accel_mag = np.sqrt(vib["ax"] ** 2 + vib["ay"] ** 2 + vib["az"] ** 2)
-    vib["accel_mag_g"] = accel_mag
-    # Gravity-removed AC component — what you actually feel as "vibration".
-    vib["vib_g"] = (accel_mag - 1.0).abs()
-    s = vib.set_index("timestamp")["vib_g"]
-    vib["vib_rms_g"] = (
-        s.pow(2).rolling(rms_window).mean().pow(0.5).to_numpy()
-    )
-    return vib
+def _interp_to(track: pd.DataFrame, target_ts: pd.Series) -> pd.DataFrame:
+    """Linearly interpolate track columns onto target timestamps."""
+    src_ns = track["timestamp"].astype("int64").to_numpy()
+    tgt_ns = target_ts.astype("int64").to_numpy()
+    out = pd.DataFrame({"timestamp": target_ts.values})
+    for col in ("lat", "lon", "ele", "cum_dist_m", "speed_mps", "speed_kmh"):
+        if col in track.columns:
+            out[col] = np.interp(tgt_ns, src_ns, track[col].to_numpy(),
+                                 left=np.nan, right=np.nan)
+    return out
 
 
-def merge_streams(
-    gps: pd.DataFrame, vib: pd.DataFrame, tolerance: str = "2s"
-) -> pd.DataFrame:
-    gps = gps.sort_values("timestamp")
-    vib = vib.sort_values("timestamp")
-    merged = pd.merge_asof(
-        vib, gps, on="timestamp", direction="nearest",
-        tolerance=pd.Timedelta(tolerance),
-    )
-    return merged.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+def build(gpx_path: str | Path, lightblue_csv: str | Path,
+          out_dir: str | Path = "data") -> dict[str, Path]:
+    out_dir = Path(out_dir); out_dir.mkdir(exist_ok=True)
+    imu = parse_lightblue(lightblue_csv)
+    track = _enrich_track(_load_gpx(gpx_path))
 
+    windows = stft_features(imu)
+    geo = _interp_to(track, windows["timestamp"])
+    windows = pd.concat([windows.reset_index(drop=True),
+                         geo.drop(columns="timestamp").reset_index(drop=True)], axis=1)
+    windows = windows.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
-def build(
-    gpx_path: str | Path, vibration_csv: str | Path, out_path: str | Path
-) -> pd.DataFrame:
-    gps = add_speed(load_gpx(gpx_path))
-    vib = pd.read_csv(vibration_csv, parse_dates=["timestamp"])
-    if vib["timestamp"].dt.tz is None:
-        vib["timestamp"] = vib["timestamp"].dt.tz_localize("UTC")
-    vib = add_vibration_features(vib)
-    merged = merge_streams(gps, vib)
-    merged.to_csv(out_path, index=False)
-    print(f"merged {len(merged)} rows -> {out_path}")
-    return merged
+    paths = {
+        "imu": out_dir / "imu.csv",
+        "windows": out_dir / "windows.csv",
+        "track": out_dir / "track.csv",
+    }
+    imu.to_csv(paths["imu"], index=False)
+    windows.to_csv(paths["windows"], index=False)
+    track.to_csv(paths["track"], index=False)
+    print(f"imu={len(imu)}  windows={len(windows)}  track={len(track)}")
+    return paths
 
 
 if __name__ == "__main__":
     import sys
-    build(sys.argv[1], sys.argv[2], sys.argv[3])
+    build(sys.argv[1], sys.argv[2],
+          sys.argv[3] if len(sys.argv) > 3 else "data")
