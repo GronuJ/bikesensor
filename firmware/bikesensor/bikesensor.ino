@@ -11,8 +11,9 @@
 // IMU bytes are forwarded RAW from the MPU-6050 FIFO (big-endian on the wire).
 // Scale on host: ±4g -> 1/8192 g/LSB, ±500°/s -> 1/65.5 °/s/LSB.
 //
-// Build: Arduino IDE, board "ESP32 Dev Module", lib "NimBLE-Arduino" by h2zero.
-// Wiring (any ESP32 dev board): SDA->21, SCL->22, MPU AD0->GND, VCC->3V3.
+// Build: PlatformIO (firmware/platformio.ini), env esp32-c3-supermini.
+// Wiring (ESP32-C3 SuperMini): SDA->GPIO 6, SCL->GPIO 7, MPU AD0->GND, VCC->3V3.
+// (GPIO 8 has the onboard LED, GPIO 9 is the BOOT button — both unsafe for I²C.)
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -129,7 +130,7 @@ static void sendBatch() {
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(21, 22, 400000);
+  Wire.begin(6, 7, 400000);   // SDA=GPIO 6, SCL=GPIO 7 on ESP32-C3 SuperMini
   mpuInit();
 
   NimBLEDevice::init("bikesensor");
@@ -146,9 +147,17 @@ void setup() {
 }
 
 void loop() {
+  static uint32_t lastBeatMs = 0;
+  uint32_t now = millis();
+  if (now - lastBeatMs > 1000) {
+    Serial.printf("[%lus] subscribed=%d sample_idx=%lu fifo=%u\n",
+                  now / 1000, subscribed ? 1 : 0,
+                  (unsigned long)sampleIdx, fifoCount());
+    lastBeatMs = now;
+  }
+
   if (!subscribed) { delay(20); return; }
 
-  uint32_t now = millis();
   if (lastSyncMs == 0 || now - lastSyncMs > 30000) {
     sendSync();
     lastSyncMs = now;

@@ -5,7 +5,8 @@ short-time FFTs aligned to ~2 m of road via clock-model + GPS interpolation.
 
 ## Hardware
 
-- ESP32 (any dev board) + MPU-6050 over I²C (SDA=21, SCL=22, AD0→GND).
+- ESP32-C3 SuperMini + MPU-6050 over I²C (SDA=GPIO 6, SCL=GPIO 7, AD0→GND).
+  Avoid GPIO 8 (onboard LED) and GPIO 9 (BOOT button).
 - iOS phone running [LightBlue](https://punchthrough.com/lightblue/) for BLE log capture.
 - Phone records a GPX track in parallel (any GPX recorder app).
 
