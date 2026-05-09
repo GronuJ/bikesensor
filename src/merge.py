@@ -17,7 +17,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import argparse
+import sys
 from pathlib import Path
+
+# Add project root to sys.path so we can import from src.* when running as a script
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gpxpy
 import numpy as np
