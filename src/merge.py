@@ -32,6 +32,11 @@ from src.lightblue_parse import parse as parse_lightblue
 
 
 def _load_gpx(path: str | Path) -> pd.DataFrame:
+    """
+    Parses a GPX file and extracts timestamped GPS points.
+    
+    Returns a DataFrame with columns [timestamp, lat, lon, ele] sorted by time.
+    """
     with open(path) as f:
         gpx = gpxpy.parse(f)
     rows = [
@@ -44,6 +49,12 @@ def _load_gpx(path: str | Path) -> pd.DataFrame:
 
 
 def _haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
+    """
+    Computes the great-circle distance between two points on Earth in meters.
+    
+    Uses the Haversine formula, which is robust for small distances and 
+    assumes a spherical Earth with radius R = 6371km.
+    """
     R = 6371000.0
     lat1, lon1, lat2, lon2 = map(np.radians, (lat1, lon1, lat2, lon2))
     dlat, dlon = lat2 - lat1, lon2 - lon1
@@ -52,11 +63,20 @@ def _haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
 
 
 def _enrich_track(gps: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculates cumulative distance, speed, and speed in km/h from raw GPS points.
+    
+    This provides the necessary spatial context for the vibration data, 
+    allowing us to map vibration to distance along the track.
+    """
     gps = gps.copy()
+    # Calculate distance between consecutive points
     seg = _haversine_m(gps["lat"].shift(), gps["lon"].shift(),
                        gps["lat"], gps["lon"])
     seg = np.nan_to_num(seg, nan=0.0)
     gps["cum_dist_m"] = np.cumsum(seg)
+    
+    # Calculate speed (mps and kmh)
     dt = gps["timestamp"].diff().dt.total_seconds().fillna(1.0)
     gps["speed_mps"] = (seg / dt).clip(lower=0)
     gps["speed_kmh"] = gps["speed_mps"] * 3.6
@@ -64,12 +84,24 @@ def _enrich_track(gps: pd.DataFrame) -> pd.DataFrame:
 
 
 def _interp_to(track: pd.DataFrame, target_ts: pd.Series) -> pd.DataFrame:
-    """Linearly interpolate track columns onto target timestamps."""
+    """
+    Linearly interpolate track columns onto target timestamps.
+    
+    Since the GPX data is typically sampled at 1Hz and the FFT windows are 
+    calculated more frequently (e.g., 10Hz), we interpolate the GPS coordinates 
+    and distance metrics to the center of each FFT window. 
+    
+    This 'up-sampling' of the GPS track assumes a constant velocity between 
+    GPS fixes, providing a much smoother spatial mapping of vibration.
+    """
+    # Convert timestamps to nanoseconds for numpy interpolation
     src_ns = pd.to_datetime(track["timestamp"], utc=True).astype("datetime64[ns, UTC]").astype("int64").to_numpy()
     tgt_ns = pd.to_datetime(target_ts, utc=True).astype("datetime64[ns, UTC]").astype("int64").to_numpy()
+    
     out = pd.DataFrame({"timestamp": target_ts.values})
     for col in ("lat", "lon", "ele", "cum_dist_m", "speed_mps", "speed_kmh"):
         if col in track.columns:
+            # Interpolate each metric onto the target timestamps
             out[col] = np.interp(tgt_ns, src_ns, track[col].to_numpy(),
                                  left=np.nan, right=np.nan)
     return out
@@ -77,6 +109,14 @@ def _interp_to(track: pd.DataFrame, target_ts: pd.Series) -> pd.DataFrame:
 
 def build(gpx_paths: list[str | Path], csv_paths: list[str | Path],
           out_dir: str | Path = "data") -> dict[str, Path]:
+    """
+    The main pipeline for merging raw sensor data and GPS tracks.
+    
+    1. Parses all LightBlue IMU CSVs and computes STFT features.
+    2. Parses all GPX tracks and calculates cumulative distance.
+    3. Interpolates the GPS track onto the STFT window center timestamps.
+    4. Saves the results as three CSV files: imu.csv, windows.csv, and track.csv.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(exist_ok=True, parents=True)
     

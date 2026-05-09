@@ -51,14 +51,25 @@ static uint16_t fifoCount() {
 }
 
 static void mpuInit() {
-  w8(REG_PWR_MGMT_1,  0x80); delay(100);   // reset
-  w8(REG_PWR_MGMT_1,  0x01);               // clk = PLL gyro X
-  w8(REG_CONFIG,      0x01);               // DLPF: 184 Hz accel BW, 188 Hz gyro BW, gyro_out=1 kHz
-  w8(REG_SMPLRT_DIV,  (1000 / FS_HZ) - 1); // 1000/(1+div) -> FS_HZ
-  w8(REG_GYRO_CONF,   0x08);               // ±500 °/s
-  w8(REG_ACCEL_CONF,  0x08);               // ±4 g
-  w8(REG_USER_CTRL,   0x44);               // FIFO_EN | FIFO_RESET
-  w8(REG_FIFO_EN,     0x78);               // accel xyz + gyro xyz to FIFO
+  // MPU-6050 Initialization Sequence
+  w8(REG_PWR_MGMT_1,  0x80); delay(100);   // Reset device
+  w8(REG_PWR_MGMT_1,  0x01);               // Use PLL with X-axis gyroscope reference for stable clock
+  
+  // Digital Low Pass Filter (DLPF) Configuration
+  // Setting 0x01: Accel BW = 184Hz, Gyro BW = 188Hz. 
+  // This helps remove high-frequency noise before sampling.
+  w8(REG_CONFIG,      0x01);               
+  
+  // Sample Rate Divider: fs = GyroOutputRate / (1 + divider)
+  // GyroOutputRate is 1kHz when DLPF is enabled.
+  w8(REG_SMPLRT_DIV,  (1000 / FS_HZ) - 1); 
+  
+  w8(REG_GYRO_CONF,   0x08);               // Full scale range: ±500 °/s
+  w8(REG_ACCEL_CONF,  0x08);               // Full scale range: ±4 g (ideal for bike vibration)
+  
+  // Initialize FIFO
+  w8(REG_USER_CTRL,   0x44);               // Enable FIFO and reset it
+  w8(REG_FIFO_EN,     0x78);               // Load Accel X/Y/Z and Gyro X/Y/Z into FIFO
 }
 
 // ---------- BLE ----------
@@ -67,12 +78,13 @@ static constexpr const char* CHR_UUID  = "0000ffe1-0000-1000-8000-00805f9b34fb";
 
 static NimBLECharacteristic* chr = nullptr;
 static volatile bool subscribed = false;
-static uint32_t sampleIdx = 0;
+static uint32_t sampleIdx = 0;       // Monotonically increasing index for the clock model
 static uint32_t lastSyncMs = 0;
 
 class SrvCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s, NimBLEConnInfo&) override {
-    s->updateConnParams(s->getPeerInfo(0).getConnHandle(), 12, 24, 0, 200); // 15-30ms
+    // Request a fast connection interval (15-30ms) for responsive data throughput.
+    s->updateConnParams(s->getPeerInfo(0).getConnHandle(), 12, 24, 0, 200); 
   }
   void onDisconnect(NimBLEServer* s, NimBLEConnInfo&, int) override {
     subscribed = false;
@@ -84,7 +96,8 @@ class ChrCb : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, uint16_t v) override {
     subscribed = (v != 0);
     if (subscribed) {
-      // Reset FIFO + sample index so host clock model starts clean.
+      // CRITICAL: When the phone starts listening, we reset the sample index 
+      // and FIFO so the linear clock model on the host starts from a clean zero.
       w8(REG_USER_CTRL, 0x44);
       sampleIdx = 0;
       lastSyncMs = 0;
@@ -93,6 +106,10 @@ class ChrCb : public NimBLECharacteristicCallbacks {
 };
 
 static void sendSync() {
+  /**
+   * Sends a SYNC packet to anchor the phone's wallclock to our sample index.
+   * Protocol: [0xA5][sampleIdx LE][fs LE][n_axes][reserved]
+   */
   uint8_t pkt[9];
   pkt[0] = 0xA5;
   memcpy(pkt + 1, &sampleIdx, 4);
@@ -104,6 +121,10 @@ static void sendSync() {
 }
 
 static void sendBatch() {
+  /**
+   * Reads a batch of samples from the MPU-6050 FIFO and sends them over BLE.
+   * Protocol: [0x5A][firstSampleIdx LE][nSamples][Payload]
+   */
   const uint16_t need = SAMPLES_PER_PKT * BYTES_PER_SAMPLE;
   if (fifoCount() < need) return;
 
@@ -112,7 +133,9 @@ static void sendBatch() {
   memcpy(pkt + 1, &sampleIdx, 4);
   pkt[5] = SAMPLES_PER_PKT;
 
-  // Read FIFO in chunks (Wire buffer is 32 B on ESP32 by default — bump or chunk).
+  // Read FIFO in chunks.
+  // The standard Arduino/ESP32 Wire buffer is often limited to 32 bytes.
+  // We read the 120-byte payload in 32-byte segments to avoid buffer overflow.
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(REG_FIFO_RW);
   Wire.endTransmission(false);

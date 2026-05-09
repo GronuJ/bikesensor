@@ -26,7 +26,9 @@ RAW_DATA = Path("raw_data")
 st.set_page_config(page_title="Bike Sensor", layout="wide")
 st.title("Bike vibration map")
 
-# --- File Uploader Workflow ---
+# --- Section 1: Data Ingestion (Sidebar) ---
+# Allows the user to upload raw GPX and LightBlue CSV files.
+# The files are saved to raw_data/ and then processed by the merge pipeline.
 with st.sidebar.expander("Upload New Ride Data", expanded=not (DATA / "windows.csv").exists()):
     st.markdown("Upload GPX tracks and LightBlue logs (CSV/TXT) here.")
     uploaded_files = st.file_uploader(
@@ -52,6 +54,7 @@ with st.sidebar.expander("Upload New Ride Data", expanded=not (DATA / "windows.c
         else:
             with st.spinner("Processing ride data..."):
                 try:
+                    # Run the merge.py pipeline
                     merge_build(gpx_paths, csv_paths, DATA)
                     st.success("Processing complete!")
                     st.rerun()
@@ -62,9 +65,11 @@ if not (DATA / "windows.csv").exists():
     st.info("No processed data found. Please upload your ride files using the sidebar to get started.")
     st.stop()
 
+# --- Section 2: Load Processed Data ---
 windows = pd.read_csv(DATA / "windows.csv", parse_dates=["timestamp"])
 imu = pd.read_csv(DATA / "imu.csv", parse_dates=["timestamp"])
 
+# Sidebar controls for map visualization
 metric = st.sidebar.selectbox(
     "Map metric",
     ["band_mid_g", "band_low_g", "band_high_g", "rms_g", "speed_kmh", "peak_hz"],
@@ -72,7 +77,7 @@ metric = st.sidebar.selectbox(
 )
 radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 10)
 
-# --- KPIs ---
+# --- Section 3: KPIs (Key Performance Indicators) ---
 duration_min = (windows["timestamp"].max() - windows["timestamp"].min()).total_seconds() / 60
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Duration (min)", f"{duration_min:.1f}")
@@ -80,17 +85,19 @@ c2.metric("Distance (km)", f"{windows['cum_dist_m'].max() / 1000:.2f}")
 c3.metric("Avg speed (km/h)", f"{windows['speed_kmh'].mean():.1f}")
 c4.metric(f"Mean {metric}", f"{windows[metric].mean():.3f}")
 
-# --- map ---
+# --- Section 4: Interactive Map ---
 mid_lat, mid_lon = windows["lat"].mean(), windows["lon"].mean()
 m = folium.Map(location=[mid_lat, mid_lon], zoom_start=15, tiles="OpenStreetMap")
 
-# Folium track polyline (faint).
+# Draw the ride track as a faint line
 folium.PolyLine(
     list(zip(windows["lat"], windows["lon"], strict=True)),
     weight=2, opacity=0.4, color="#444",
 ).add_to(m)
 
-# Heatmap weighted by chosen metric (normalize to [0,1] for sane coloring).
+# Heatmap Layer:
+# We normalize the chosen metric to a [0, 1] range based on the 5th and 95th 
+# percentiles to ensure the heatmap colors are meaningful even if there are outliers.
 v = windows[metric].to_numpy()
 lo, hi = np.nanpercentile(v, [5, 95])
 w = np.clip((v - lo) / (hi - lo + 1e-9), 0, 1)
@@ -99,7 +106,9 @@ HeatMap(
     radius=radius, blur=radius, min_opacity=0.3,
 ).add_to(m)
 
-# Clickable markers (sparse — every Nth window — to keep map snappy).
+# Clickable markers:
+# We add invisible markers every N samples to allow the user to click 
+# on the map and see the specific spectrum for that location.
 stride = max(1, len(windows) // 400)
 for _, row in windows.iloc[::stride].iterrows():
     folium.CircleMarker(
@@ -110,18 +119,24 @@ for _, row in windows.iloc[::stride].iterrows():
     ).add_to(m)
 
 st.subheader("Map")
+# Render map and capture click events
 event = st_folium(m, height=550, width=None, returned_objects=["last_object_clicked"])
 
-# --- spectrum on click (or default to loudest window) ---
+# --- Section 5: Spectral Analysis (Context-Sensitive) ---
+# If a point on the map is clicked, we show the spectrum for that exact point.
+# Otherwise, we default to the window with the maximum value of the selected metric.
 clicked = event.get("last_object_clicked") if event else None
 if clicked:
+    # Find the window closest to the click coordinates
     d = (windows["lat"] - clicked["lat"]) ** 2 + (windows["lon"] - clicked["lng"]) ** 2
     sel = windows.loc[d.idxmin()]
 else:
+    # Default selection
     sel = windows.loc[windows[metric].idxmax()]
 
 st.subheader(f"Spectrum @ {sel['timestamp']} ({metric}={sel[metric]:.3f})")
 
+# Extract the raw IMU samples for the selected window
 fs = float(sel["fs_hz"])
 win_n = int(sel["win_n"])
 center = pd.to_datetime(sel["timestamp"], utc=True)
@@ -129,6 +144,7 @@ half = pd.Timedelta(seconds=win_n / fs / 2)
 seg_imu = imu[(imu["timestamp"] >= center - half) & (imu["timestamp"] <= center + half)]
 
 if len(seg_imu) >= 8:
+    # Recalculate PSD for the selected window for visualization
     sig = np.sqrt(seg_imu["ax"] ** 2 + seg_imu["ay"] ** 2 + seg_imu["az"] ** 2).to_numpy() - 1.0
     sig = detrend(sig, type="constant")
     n = len(sig)
@@ -143,7 +159,8 @@ if len(seg_imu) >= 8:
 else:
     st.info("Not enough IMU samples around this point.")
 
-# --- timeseries along distance ---
+# --- Section 6: Distance Plots ---
+# Shows how vibration and speed change along the course of the ride.
 st.subheader("Along the route")
 fig = px.line(windows, x="cum_dist_m",
               y=["band_low_g", "band_mid_g", "band_high_g"],
