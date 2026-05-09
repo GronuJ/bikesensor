@@ -31,15 +31,23 @@ ACC_SCALE = 1.0 / 8192.0   # ±4g  -> g
 GYR_SCALE = 1.0 / 65.5     # ±500 -> °/s
 
 
+import re
+
 def _hex_bytes(s: str) -> bytes:
-    return bytes.fromhex(s.replace(" ", "").replace("0x", "").replace(":", ""))
+    m = re.search(r'<([^>]+)>', s)
+    if m:
+        s = m.group(1)
+    try:
+        return bytes.fromhex(s.replace(" ", "").replace("0x", "").replace(":", ""))
+    except ValueError:
+        return b""
 
 
 def parse(path: str | Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, on_bad_lines="skip")
     tcol = next(c for c in df.columns if "time" in c.lower())
     vcol = next(c for c in df.columns
-                if any(k in c.lower() for k in ("value", "hex", "data", "bytes")))
+                if any(k in c.lower() for k in ("value", "hex", "data", "bytes", "logevent")))
     df = df[[tcol, vcol]].rename(columns={tcol: "t_phone", vcol: "hex"}).dropna()
     df["t_phone"] = pd.to_datetime(df["t_phone"], utc=True, format="ISO8601",
                                     errors="coerce")

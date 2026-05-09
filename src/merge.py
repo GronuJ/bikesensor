@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import argparse
+from pathlib import Path
+
 import gpxpy
 import numpy as np
 import pandas as pd
@@ -28,7 +31,7 @@ def _load_gpx(path: str | Path) -> pd.DataFrame:
     with open(path) as f:
         gpx = gpxpy.parse(f)
     rows = [
-        {"timestamp": p.time, "lat": p.latitude, "lon": p.longitude, "ele": p.elevation}
+        {"timestamp": p.time, "lat": float(p.latitude) if p.latitude is not None else np.nan, "lon": float(p.longitude) if p.longitude is not None else np.nan, "ele": float(p.elevation) if p.elevation is not None else np.nan}
         for trk in gpx.tracks for seg in trk.segments for p in seg.points
     ]
     df = pd.DataFrame(rows)
@@ -58,8 +61,8 @@ def _enrich_track(gps: pd.DataFrame) -> pd.DataFrame:
 
 def _interp_to(track: pd.DataFrame, target_ts: pd.Series) -> pd.DataFrame:
     """Linearly interpolate track columns onto target timestamps."""
-    src_ns = track["timestamp"].astype("int64").to_numpy()
-    tgt_ns = target_ts.astype("int64").to_numpy()
+    src_ns = pd.to_datetime(track["timestamp"], utc=True).astype("datetime64[ns, UTC]").astype("int64").to_numpy()
+    tgt_ns = pd.to_datetime(target_ts, utc=True).astype("datetime64[ns, UTC]").astype("int64").to_numpy()
     out = pd.DataFrame({"timestamp": target_ts.values})
     for col in ("lat", "lon", "ele", "cum_dist_m", "speed_mps", "speed_kmh"):
         if col in track.columns:
@@ -68,15 +71,47 @@ def _interp_to(track: pd.DataFrame, target_ts: pd.Series) -> pd.DataFrame:
     return out
 
 
-def build(gpx_path: str | Path, lightblue_csv: str | Path,
+def build(gpx_paths: list[str | Path], csv_paths: list[str | Path],
           out_dir: str | Path = "data") -> dict[str, Path]:
-    out_dir = Path(out_dir); out_dir.mkdir(exist_ok=True)
-    imu = parse_lightblue(lightblue_csv)
-    track = _enrich_track(_load_gpx(gpx_path))
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True, parents=True)
+    
+    if not gpx_paths:
+        raise ValueError("No GPX files provided.")
+    if not csv_paths:
+        raise ValueError("No CSV files provided.")
 
-    windows = stft_features(imu)
-    geo = _interp_to(track, windows["timestamp"])
-    windows = pd.concat([windows.reset_index(drop=True),
+    # Process all IMU CSVs
+    imus = []
+    windows_list = []
+    for p in csv_paths:
+        print(f"Parsing LightBlue CSV: {p}")
+        imu = parse_lightblue(p)
+        imus.append(imu)
+        windows_list.append(stft_features(imu))
+    
+    imu_concat = pd.concat(imus).sort_values("timestamp").reset_index(drop=True)
+    win_concat = pd.concat(windows_list).sort_values("timestamp").reset_index(drop=True)
+
+    # Process all GPX tracks
+    tracks = []
+    dist_offset = 0.0
+    for p in gpx_paths:
+        print(f"Parsing GPX: {p}")
+        trk = _enrich_track(_load_gpx(p))
+        if not trk.empty:
+            trk["cum_dist_m"] += dist_offset
+            dist_offset = trk["cum_dist_m"].max()
+            tracks.append(trk)
+            
+    if not tracks:
+        raise ValueError("No valid GPS points found in GPX files.")
+
+    track_concat = pd.concat(tracks).sort_values("timestamp").reset_index(drop=True)
+
+    # Interpolate track to windows
+    geo = _interp_to(track_concat, win_concat["timestamp"])
+    windows = pd.concat([win_concat.reset_index(drop=True),
                          geo.drop(columns="timestamp").reset_index(drop=True)], axis=1)
     windows = windows.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
@@ -85,14 +120,36 @@ def build(gpx_path: str | Path, lightblue_csv: str | Path,
         "windows": out_dir / "windows.csv",
         "track": out_dir / "track.csv",
     }
-    imu.to_csv(paths["imu"], index=False)
+    imu_concat.to_csv(paths["imu"], index=False)
     windows.to_csv(paths["windows"], index=False)
-    track.to_csv(paths["track"], index=False)
-    print(f"imu={len(imu)}  windows={len(windows)}  track={len(track)}")
+    track_concat.to_csv(paths["track"], index=False)
+    print(f"Total merged: imu={len(imu_concat)}  windows={len(windows)}  track={len(track_concat)}")
     return paths
 
 
 if __name__ == "__main__":
-    import sys
-    build(sys.argv[1], sys.argv[2],
-          sys.argv[3] if len(sys.argv) > 3 else "data")
+    parser = argparse.ArgumentParser(description="Merge GPX and LightBlue IMU CSV files.")
+    parser.add_argument("--gpx", nargs="+", required=True, help="One or more GPX files, or directories containing GPX files.")
+    parser.add_argument("--csv", nargs="+", required=True, help="One or more LightBlue CSV files, or directories containing them.")
+    parser.add_argument("--out", default="data", help="Output directory (default: data)")
+    args = parser.parse_args()
+
+    # Expand directories
+    gpx_files = []
+    for p in args.gpx:
+        path = Path(p)
+        if path.is_dir():
+            gpx_files.extend(path.rglob("*.gpx"))
+        else:
+            gpx_files.append(path)
+            
+    csv_files = []
+    for p in args.csv:
+        path = Path(p)
+        if path.is_dir():
+            csv_files.extend(path.rglob("*.csv"))
+            csv_files.extend(path.rglob("*.txt"))
+        else:
+            csv_files.append(path)
+
+    build(gpx_files, csv_files, args.out)

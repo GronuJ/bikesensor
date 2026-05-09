@@ -23,7 +23,7 @@ st.set_page_config(page_title="Bike Sensor", layout="wide")
 st.title("Bike vibration map")
 
 if not (DATA / "windows.csv").exists():
-    st.error("Run `uv run python src/merge.py <gpx> <lightblue.csv>` first.")
+    st.error("Run `uv run python src/merge.py --gpx <gpx_dir> --csv <csv_dir>` first.")
     st.stop()
 
 windows = pd.read_csv(DATA / "windows.csv", parse_dates=["timestamp"])
@@ -86,7 +86,8 @@ else:
 
 st.subheader(f"Spectrum @ {sel['timestamp']} ({metric}={sel[metric]:.3f})")
 
-fs = float(sel["fs_hz"]); win_n = int(sel["win_n"])
+fs = float(sel["fs_hz"])
+win_n = int(sel["win_n"])
 center = pd.to_datetime(sel["timestamp"], utc=True)
 half = pd.Timedelta(seconds=win_n / fs / 2)
 seg_imu = imu[(imu["timestamp"] >= center - half) & (imu["timestamp"] <= center + half)]
@@ -94,7 +95,8 @@ seg_imu = imu[(imu["timestamp"] >= center - half) & (imu["timestamp"] <= center 
 if len(seg_imu) >= 8:
     sig = np.sqrt(seg_imu["ax"] ** 2 + seg_imu["ay"] ** 2 + seg_imu["az"] ** 2).to_numpy() - 1.0
     sig = detrend(sig, type="constant")
-    n = len(sig); win = get_window("hann", n)
+    n = len(sig)
+    win = get_window("hann", n)
     psd = (np.abs(np.fft.rfft(sig * win)) ** 2) / (fs * (win ** 2).sum())
     psd[1:-1] *= 2
     freqs = np.fft.rfftfreq(n, d=1.0 / fs)
