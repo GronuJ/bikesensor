@@ -6,6 +6,7 @@ Dashboard: map heatmap of vibration band energy + click-to-see-spectrum.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import folium
@@ -17,13 +18,48 @@ from folium.plugins import HeatMap
 from scipy.signal import detrend, get_window
 from streamlit_folium import st_folium
 
+from src.merge import build as merge_build
+
 DATA = Path("data")
+RAW_DATA = Path("raw_data")
 
 st.set_page_config(page_title="Bike Sensor", layout="wide")
 st.title("Bike vibration map")
 
+# --- File Uploader Workflow ---
+with st.sidebar.expander("Upload New Ride Data", expanded=not (DATA / "windows.csv").exists()):
+    st.markdown("Upload GPX tracks and LightBlue logs (CSV/TXT) here.")
+    uploaded_files = st.file_uploader(
+        "Select files", accept_multiple_files=True, type=["gpx", "csv", "txt"]
+    )
+    if st.button("Process Uploaded Files") and uploaded_files:
+        RAW_DATA.mkdir(exist_ok=True)
+        gpx_paths = []
+        csv_paths = []
+        
+        for f in uploaded_files:
+            file_path = RAW_DATA / f.name
+            with open(file_path, "wb") as out_f:
+                out_f.write(f.getbuffer())
+            
+            if f.name.lower().endswith(".gpx"):
+                gpx_paths.append(file_path)
+            elif f.name.lower().endswith((".csv", ".txt")):
+                csv_paths.append(file_path)
+        
+        if not gpx_paths or not csv_paths:
+            st.error("Please upload at least one GPX and one CSV/TXT file.")
+        else:
+            with st.spinner("Processing ride data..."):
+                try:
+                    merge_build(gpx_paths, csv_paths, DATA)
+                    st.success("Processing complete!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error during processing: {e}")
+
 if not (DATA / "windows.csv").exists():
-    st.error("Run `uv run python src/merge.py --gpx <gpx_dir> --csv <csv_dir>` first.")
+    st.info("No processed data found. Please upload your ride files using the sidebar to get started.")
     st.stop()
 
 windows = pd.read_csv(DATA / "windows.csv", parse_dates=["timestamp"])
