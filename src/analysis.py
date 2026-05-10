@@ -70,9 +70,12 @@ def stft_features(imu: pd.DataFrame) -> pd.DataFrame:
     # Pre-calculate 25Hz low-pass filtered signal for bump severity
     cutoff_hz = 25.0
     nyq = 0.5 * cfg.fs
-    normal_cutoff = cutoff_hz / nyq
-    b, a = butter(4, normal_cutoff, btype='low', analog=False)
-    sig_filtered = filtfilt(b, a, sig)
+    if cutoff_hz >= nyq:
+        sig_filtered = sig
+    else:
+        normal_cutoff = cutoff_hz / nyq
+        b, a = butter(4, normal_cutoff, btype='low', analog=False)
+        sig_filtered = filtfilt(b, a, sig)
 
     # Slide the window across the signal with a fixed hop size
     starts = np.arange(0, len(sig) - cfg.win_n + 1, cfg.hop_n)

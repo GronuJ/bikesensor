@@ -80,7 +80,8 @@ def parse(path: str | Path) -> pd.DataFrame:
                 if any(k in c.lower() for k in ("value", "hex", "data", "bytes", "logevent")))
     
     df = df[[tcol, vcol]].rename(columns={tcol: "t_phone", vcol: "hex"}).dropna()
-    df["t_phone"] = pd.to_datetime(df["t_phone"], utc=True, format="ISO8601",
+    df["t_phone"] = df["t_phone"].astype(str).str.replace("GMT", "", regex=False)
+    df["t_phone"] = pd.to_datetime(df["t_phone"], utc=True, format="mixed",
                                     errors="coerce")
     df = df.dropna(subset=["t_phone"]).reset_index(drop=True)
 
@@ -106,10 +107,8 @@ def parse(path: str | Path) -> pd.DataFrame:
             first = struct.unpack_from("<I", b, 1)[0]
             n = b[5]
             payload = b[6:6 + 12 * n]
-            if len(payload) != 12 * n:
-                # Malformed or truncated packet; skip.
-                continue
-            for k in range(n):
+            n_actual = len(payload) // 12
+            for k in range(n_actual):
                 sample_idx.append(first + k)
                 raw.append(payload[12 * k:12 * (k + 1)])
 

@@ -175,9 +175,12 @@ with tab_map:
             from scipy.signal import butter, filtfilt
             cutoff_hz = 25.0
             nyq = 0.5 * fs
-            normal_cutoff = cutoff_hz / nyq
-            b, a = butter(4, normal_cutoff, btype='low', analog=False)
-            sig_filtered = filtfilt(b, a, sig)
+            if cutoff_hz >= nyq:
+                sig_filtered = sig
+            else:
+                normal_cutoff = cutoff_hz / nyq
+                b, a = butter(4, normal_cutoff, btype='low', analog=False)
+                sig_filtered = filtfilt(b, a, sig)
             
             time_arr = (seg_imu["timestamp"] - seg_imu["timestamp"].iloc[0]).dt.total_seconds().to_numpy()
             
