@@ -24,6 +24,7 @@ distinguished by first byte:
 IMU bytes are forwarded raw from the MPU-6050 FIFO (big-endian).
 Defaults: fs = 250 Hz, N = 10 samples/packet, ±4 g, ±500 °/s.
 
+![](./assets/wiring-diagram.png)
 ## Spatial-accuracy strategy
 
 1. **Sample timestamps** come from a linear fit `t_phone = a + b·sample_idx`
