@@ -167,7 +167,7 @@ void setup() {
   Wire.begin(6, 7, 400000);   // SDA=GPIO 6, SCL=GPIO 7 on ESP32-C3 SuperMini
   mpuInit();
 
-  NimBLEDevice::init("bikesensor_jj");
+  NimBLEDevice::init("bikesensor_jj2");
   NimBLEDevice::setMTU(185);
   auto* srv = NimBLEDevice::createServer();
   srv->setCallbacks(new SrvCb());
@@ -177,11 +177,11 @@ void setup() {
   auto* adv = NimBLEDevice::getAdvertising();
   // NimBLE 2.x: device name is NOT auto-included in the advertisement —
   // must be set on the advertising object explicitly, or scanners show "Unknown".
-  adv->setName("bikesensor_jj");
+  adv->setName("bikesensor_jj2");
   adv->addServiceUUID(SVC_UUID);
   adv->enableScanResponse(true);
   adv->start();
-  Serial.println("BLE advertising as 'bikesensor_jj'");
+  Serial.println("BLE advertising as 'bikesensor_jj2'");
 }
 
 void loop() {
