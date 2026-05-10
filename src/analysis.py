@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from scipy.signal import detrend, get_window
+from scipy.signal import butter, detrend, filtfilt, get_window
 
 WIN_S = 0.5
 HOP_S = 0.1
@@ -67,6 +67,13 @@ def stft_features(imu: pd.DataFrame) -> pd.DataFrame:
     win_energy = (win ** 2).sum()
     freqs = np.fft.rfftfreq(cfg.win_n, d=1.0 / cfg.fs)
 
+    # Pre-calculate 25Hz low-pass filtered signal for bump severity
+    cutoff_hz = 25.0
+    nyq = 0.5 * cfg.fs
+    normal_cutoff = cutoff_hz / nyq
+    b, a = butter(4, normal_cutoff, btype='low', analog=False)
+    sig_filtered = filtfilt(b, a, sig)
+
     # Slide the window across the signal with a fixed hop size
     starts = np.arange(0, len(sig) - cfg.win_n + 1, cfg.hop_n)
     rows = []
@@ -85,6 +92,7 @@ def stft_features(imu: pd.DataFrame) -> pd.DataFrame:
         row = {
             "t_center_ns": int(ts_ns[s + cfg.win_n // 2]),
             "rms_g": float(np.sqrt(np.trapezoid(psd, freqs))),
+            "max_bump_g": float(np.max(np.abs(sig_filtered[s:s + cfg.win_n]))),
         }
         
         # Integrate PSD within defined frequency bands to get band-specific RMS.
