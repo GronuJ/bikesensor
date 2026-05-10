@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>bikesensor - Project Showcase</title>
+
+    <!-- Reveal.js CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/reset.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/reveal.min.css">
+    <!-- Theme: Simple light theme -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/theme/simple.min.css" id="theme">
+    
+    <!-- Custom Styles for Cleaner Design -->
+    <style>
+        .reveal {
+            font-size: 28px; /* Reduced base font size */
+            color: #333;
+        }
+        .reveal h1, .reveal h2, .reveal h3 {
+            color: #2c3e50; /* Softer, professional blue-gray */
+            text-transform: none;
+            font-weight: 600;
+        }
+        .reveal h1 {
+            font-size: 2em;
+            margin-bottom: 0.2em;
+        }
+        .reveal h2 {
+            font-size: 1.5em;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+        }
+        .reveal p, .reveal li {
+            font-size: 1em;
+            line-height: 1.4;
+            color: #4a5568;
+        }
+        .code-block {
+            background-color: #f8f9fa;
+            color: #24292e;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e1e4e8;
+            font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.8em;
+            text-align: left;
+            overflow-x: auto;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .highlight {
+            font-weight: bold;
+            color: #0366d6;
+        }
+        .feature-list li {
+            margin-bottom: 12px;
+        }
+        .reveal .controls, .reveal .progress {
+            color: #2c3e50;
+        }
+        /* Dashboard Button Style */
+        .dash-button {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 24px;
+            background-color: #2c3e50;
+            color: #ffffff !important;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 0.8em;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        .dash-button:hover {
+            background-color: #1a252f;
+        }
+        /* Image Style */
+        .slide-image {
+            max-width: 80%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            margin-top: 20px !important;
+            border: 1px solid #e1e4e8;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="reveal">
+        <div class="slides">
+
+            <!-- Title Slide -->
+            <section data-transition="fade">
+                <h1>bikesensor</h1>
+                <h3>Geo-tagged Bike Vibration Analysis</h3>
+                <p>
+                    Combining hardware, BLE, and signal processing to map road quality.
+                </p>
+            </section>
+
+            <!-- Concept Slide -->
+            <section data-transition="fade">
+                <h2>The Concept</h2>
+                <p>How do we measure the quality of a road or trail while riding?</p>
+                <ul class="feature-list">
+                    <li class="fragment">Attach an Inertial Measurement Unit (IMU) to the bike.</li>
+                    <li class="fragment">Record high-frequency vibration data (acceleration & gyro).</li>
+                    <li class="fragment">Correlate time-series vibrations with GPS coordinates.</li>
+                    <li class="fragment">Map the "bumpiness" and frequency spectrum of the route.</li>
+                </ul>
+            </section>
+
+            <!-- Hardware Slide -->
+            <section data-transition="fade">
+                <h2>The Hardware</h2>
+                <div style="display: flex; align-items: center; justify-content: center; gap: 40px;">
+                    <div>
+                        <ul class="feature-list" style="text-align: left; margin: 0;">
+                            <li><strong>Microcontroller:</strong> ESP32-C3 SuperMini</li>
+                            <li><strong>Sensor:</strong> MPU-6050 (6-axis IMU)</li>
+                            <li><strong>Connectivity:</strong> Bluetooth Low Energy (BLE)</li>
+                            <li><strong>Power:</strong> Battery with voltage divider for monitoring.</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <img src="system-photo.jpg" alt="Photo of the fully assembled system" class="slide-image" style="margin-top: 0 !important; max-height: 350px;" onerror="this.style.display='none'" onload="this.style.display='inline-block'">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Wiring Diagram Slide -->
+            <section data-transition="fade">
+                <h2>Wiring Diagram</h2>
+                <p>Hardware connections mapped out in Fritzing.</p>
+                <img src="wiring-diagram.png" alt="Fritzing Wiring Diagram" class="slide-image" style="max-height: 450px;" onerror="this.style.display='none'" onload="this.style.display='inline-block'">
+            </section>
+
+            <!-- Enclosure Slide -->
+            <section data-transition="fade">
+                <h2>Enclosure Design</h2>
+                <p>Custom 3D-printed housing to securely mount the system.</p>
+                <img src="enclosure-stl.png" alt="STL file screenshot" class="slide-image" style="max-height: 450px;" onerror="this.style.display='none'" onload="this.style.display='inline-block'">
+            </section>
+
+            <!-- Data Collection Slide -->
+            <section data-transition="fade">
+                <h2>Data Collection</h2>
+                <p>No bulky cellular modules or SD cards required.</p>
+                <ul class="feature-list" style="display: inline-block; text-align: left;">
+                    <li><strong>The Phone:</strong> Acts as the data hub.</li>
+                    <li><strong>BLE Logging:</strong> <span class="highlight">LightBlue app</span> receives stream from ESP32.</li>
+                    <li><strong>Location:</strong> Any GPX recorder app runs in the background.</li>
+                </ul>
+            </section>
+
+            <!-- FFT Usage Slide (New) -->
+            <section data-transition="fade">
+                <h2>Vibration Analysis (FFT)</h2>
+                <p>Understanding road texture through frequency.</p>
+                <ul class="feature-list" style="display: inline-block; text-align: left;">
+                    <li class="fragment"><strong>STFT (Short-Time Fourier Transform):</strong> Breaks data into small windows (e.g., 0.5s).</li>
+                    <li class="fragment"><strong>Frequency Bands:</strong> Separates slow rolling hills from harsh gravel chatter.</li>
+                    <li class="fragment"><strong>Intensity:</strong> RMS and Max Bump (g-force) highlight the biggest impacts.</li>
+                </ul>
+            </section>
+
+            <!-- Data Pipeline Slide -->
+            <section data-transition="fade">
+                <h2>Data Pipeline</h2>
+                <p>Built exclusively with Python and <code>uv</code>.</p>
+                <ul class="feature-list" style="display: inline-block; text-align: left;">
+                    <li>Parses raw hex packets (SYNC & DATA).</li>
+                    <li>Aligns timestamps with GPS positions.</li>
+                    <li>Extracts vibration features.</li>
+                    <li>Outputs processed CSVs for fast dashboard loading.</li>
+                </ul>
+            </section>
+
+            <!-- Dashboard Slide -->
+            <section data-transition="fade">
+                <h2>Interactive Dashboard</h2>
+                <p>Powered by <strong>Streamlit</strong> & <strong>Plotly</strong></p>
+                <ul class="feature-list" style="text-align: left; display: inline-block;">
+                    <li><strong>Map Analysis:</strong> Interactive heatmap of road roughness.</li>
+                    <li><strong>Deep Dive:</strong> Click any point on the map to view local time-domain and FFT data.</li>
+                    <li><strong>Metrics:</strong> Max Bump (g), RMS, speed, and battery consumption.</li>
+                </ul>
+                <br>
+                <!-- Image placeholder: Replace src with a real image file path when you have one -->
+                <img src="dashboard-preview.png" alt="Dashboard Preview" class="slide-image" style="display: none;" onerror="this.style.display='none'" onload="this.style.display='inline-block'">
+                <br>
+                <a href="http://localhost:8501" target="_blank" class="dash-button">Launch Dashboard 🚀</a>
+            </section>
+
+            <!-- Wrap up -->
+            <section data-transition="fade">
+                <h2>Summary</h2>
+                <ul class="feature-list" style="display: inline-block; text-align: left;">
+                    <li>Low-cost hardware using the ESP32 ecosystem.</li>
+                    <li>Signal processing for road texture analysis.</li>
+                    <li>Powerful, accessible visualization via Streamlit.</li>
+                </ul>
+                <br><br>
+                <p style="color: #2c3e50; font-weight: 600;">Ready to ride.</p>
+            </section>
+
+        </div>
+    </div>
+
+    <!-- Reveal.js Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/reveal.min.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            controls: true,
+            progress: true,
+            center: true,
+            transition: 'fade', // Simple fade transition for a cleaner feel
+            width: 1000,
+            height: 700,
+            margin: 0.1,
+        });
+    </script>
+</body>
+</html>
