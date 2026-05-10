@@ -94,6 +94,8 @@ def stft_features(imu: pd.DataFrame) -> pd.DataFrame:
             "rms_g": float(np.sqrt(np.trapezoid(psd, freqs))),
             "max_bump_g": float(np.max(np.abs(sig_filtered[s:s + cfg.win_n]))),
         }
+        if "battery_pct" in imu.columns:
+            row["battery_pct"] = float(imu["battery_pct"].iloc[s + cfg.win_n // 2])
         
         # Integrate PSD within defined frequency bands to get band-specific RMS.
         for name, (lo, hi) in BANDS.items():

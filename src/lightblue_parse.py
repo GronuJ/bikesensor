@@ -151,7 +151,15 @@ def parse(path: str | Path) -> pd.DataFrame:
     out["timestamp"] = pd.to_datetime(
         (a + b * out["sample_idx"].to_numpy()).astype("int64"), utc=True
     )
-    return out[["timestamp", "sample_idx", "ax", "ay", "az", "gx", "gy", "gz"]]
+    
+    # Interpolate battery levels across all samples based on sample_idx
+    if len(syncs) > 0:
+        sync_batt = np.array(batt_levels, dtype=np.float64)
+        out["battery_pct"] = np.interp(out["sample_idx"], sync_i, sync_batt).round().astype(int)
+    else:
+        out["battery_pct"] = 0
+
+    return out[["timestamp", "sample_idx", "battery_pct", "ax", "ay", "az", "gx", "gy", "gz"]]
 
 
 if __name__ == "__main__":

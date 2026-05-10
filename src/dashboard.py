@@ -83,11 +83,17 @@ radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 10)
 
 # --- Section 3: KPIs (Key Performance Indicators) ---
 duration_min = (windows["timestamp"].max() - windows["timestamp"].min()).total_seconds() / 60
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Duration (min)", f"{duration_min:.1f}")
 c2.metric("Distance (km)", f"{windows['cum_dist_m'].max() / 1000:.2f}")
 c3.metric("Avg speed (km/h)", f"{windows['speed_kmh'].mean():.1f}")
 c4.metric(f"Mean {metric}", f"{windows[metric].mean():.3f}")
+if "battery_pct" in windows.columns:
+    batt_start = windows["battery_pct"].iloc[0]
+    batt_end = windows["battery_pct"].iloc[-1]
+    c5.metric("Battery", f"{batt_end:.0f}%", f"{batt_end - batt_start:.0f}%", delta_color="normal")
+else:
+    c5.metric("Battery", "N/A")
 
 # --- Section 4: Main Layout (Tabs & Columns) ---
 tab_map, tab_route = st.tabs(["🗺️ Map Analysis", "📈 Route Overview"])
