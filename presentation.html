@@ -155,14 +155,25 @@
                 </ul>
             </section>
 
-            <!-- FFT Usage Slide (New) -->
+            <!-- Signal Conditioning Slide -->
             <section data-transition="fade">
-                <h2>Vibration Analysis (FFT)</h2>
+                <h2>Signal Conditioning</h2>
+                <p>Cleaning the data for accurate bump detection.</p>
+                <ul class="feature-list" style="display: inline-block; text-align: left;">
+                    <li class="fragment"><strong>Detrending:</strong> Removes gravity (1.0g) and slow-moving drift.</li>
+                    <li class="fragment"><strong>Butterworth Low-Pass:</strong> A 4th-order filter at 25Hz isolates major physical impacts.</li>
+                    <li class="fragment"><strong>Max Bump (g):</strong> Calculated from the filtered signal to highlight potholes and cracks without high-frequency noise.</li>
+                </ul>
+            </section>
+
+            <!-- Spectral Analysis Slide -->
+            <section data-transition="fade">
+                <h2>Spectral Analysis (STFT)</h2>
                 <p>Understanding road texture through frequency.</p>
                 <ul class="feature-list" style="display: inline-block; text-align: left;">
-                    <li class="fragment"><strong>STFT (Short-Time Fourier Transform):</strong> Breaks data into small windows (e.g., 0.5s).</li>
-                    <li class="fragment"><strong>Frequency Bands:</strong> Separates slow rolling hills from harsh gravel chatter.</li>
-                    <li class="fragment"><strong>Intensity:</strong> RMS and Max Bump (g-force) highlight the biggest impacts.</li>
+                    <li class="fragment"><strong>Short-Time Fourier Transform:</strong> Analyzes the vibration spectrum in 0.5s windows.</li>
+                    <li class="fragment"><strong>Frequency Bands:</strong> Separates "Gravel Chatter" (high freq) from "Body Roll" (low freq).</li>
+                    <li class="fragment"><strong>RMS Vibration:</strong> Measures the total energy of the road surface texture.</li>
                 </ul>
             </section>
 

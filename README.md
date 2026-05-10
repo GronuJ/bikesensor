@@ -1,7 +1,8 @@
 # bikesensor
 
-Geo-tagged bike vibration analysis. ESP32 + MPU-6050 over BLE, GPX from phone,
-short-time FFTs aligned to ~2 m of road via clock-model + GPS interpolation.
+**A low-cost, open-source hardware and software pipeline for geo-tagged bike vibration analysis.**
+
+`bikesensor` combines an ESP32-C3 and an MPU-6050 IMU to record high-frequency road vibrations over BLE. By syncing this data with a smartphone's GPX track using a custom clock-model and GPS interpolation, it maps road quality with sub-meter accuracy. The Python-based data pipeline applies a 25Hz Butterworth low-pass filter to isolate major bumps and Short-Time Fourier Transforms (STFT) to analyze the frequency spectrum of the road texture, visualizing everything in an interactive Streamlit dashboard.
 
 ## Hardware
 
