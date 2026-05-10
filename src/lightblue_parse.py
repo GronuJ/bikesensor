@@ -84,7 +84,7 @@ def parse(path: str | Path) -> pd.DataFrame:
                                     errors="coerce")
     df = df.dropna(subset=["t_phone"]).reset_index(drop=True)
 
-    syncs: list[tuple[pd.Timestamp, int, int]] = []   # (t_phone, sample_idx, fs)
+    syncs: list[tuple[pd.Timestamp, int, int, int]] = []   # (t_phone, sample_idx, fs, batt)
     sample_idx: list[int] = []
     raw: list[bytes] = []
 
@@ -94,11 +94,12 @@ def parse(path: str | Path) -> pd.DataFrame:
         if not b:
             continue
             
-        # SYNC Packet: [0xA5][u32 sample_idx LE][u16 fs LE][u8 n_axes][u8 _]
+        # SYNC Packet: [0xA5][u32 sample_idx LE][u16 fs LE][u8 n_axes][u8 battery_percent]
         if b[0] == 0xA5 and len(b) >= 9:
             idx = struct.unpack_from("<I", b, 1)[0]
             fs = struct.unpack_from("<H", b, 5)[0]
-            syncs.append((t_phone, idx, fs))
+            batt = b[8]
+            syncs.append((t_phone, idx, fs, batt))
             
         # DATA Packet: [0x5A][u32 first_sample_idx LE][u8 n_samples][N * 12B payload]
         elif b[0] == 0x5A and len(b) >= 6:
@@ -127,8 +128,8 @@ def parse(path: str | Path) -> pd.DataFrame:
     # Clock Model: t_phone (ns since epoch) = a + b * sample_idx.
     # We use a simple linear regression (polyfit) to find the best fit 'a' and 'b'.
     # This automatically corrects for differences in clock crystals between the ESP32 and phone.
-    sync_t = np.array([t.value for t, _, _ in syncs], dtype=np.float64)  # ns
-    sync_i = np.array([i for _, i, _ in syncs], dtype=np.float64)
+    sync_t = np.array([t.value for t, _, _, _ in syncs], dtype=np.float64)  # ns
+    sync_i = np.array([i for _, i, _, _ in syncs], dtype=np.float64)
     
     if len(syncs) >= 2:
         b, a = np.polyfit(sync_i, sync_t, 1)
@@ -138,8 +139,13 @@ def parse(path: str | Path) -> pd.DataFrame:
         a = sync_t[0] - b * sync_i[0]
         
     measured_fs = 1e9 / b
+    
+    # Calculate battery stats
+    batt_levels = [batt for _, _, _, batt in syncs]
+    batt_str = f"Batt: {batt_levels[0]}% -> {batt_levels[-1]}%" if batt_levels else "Batt: N/A"
+
     print(f"clock model: fs ≈ {measured_fs:.3f} Hz, "
-          f"{len(syncs)} SYNCs, {len(out)} samples")
+          f"{len(syncs)} SYNCs, {len(out)} samples | {batt_str}")
 
     # Apply the linear model to compute reconstructed timestamps
     out["timestamp"] = pd.to_datetime(

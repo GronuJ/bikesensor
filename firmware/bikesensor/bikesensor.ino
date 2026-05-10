@@ -19,6 +19,17 @@
 #include <Wire.h>
 #include <NimBLEDevice.h>
 
+// ---------- BATTERY ----------
+static constexpr uint8_t BATTERY_PIN = 0;
+
+static uint8_t getBatteryPercent() {
+  float mv = analogReadMilliVolts(BATTERY_PIN) * 2.0; 
+  float voltage = mv / 1000.0;
+  if (voltage >= 4.2) return 100;
+  if (voltage <= 3.3) return 0;
+  return (uint8_t)(((voltage - 3.3) / (4.2 - 3.3)) * 100.0); 
+}
+
 // ---------- MPU-6050 ----------
 static constexpr uint8_t MPU_ADDR        = 0x68;
 static constexpr uint8_t REG_SMPLRT_DIV  = 0x19;
@@ -115,7 +126,7 @@ static void sendSync() {
   memcpy(pkt + 1, &sampleIdx, 4);
   uint16_t fs = FS_HZ;
   memcpy(pkt + 5, &fs, 2);
-  pkt[7] = 6; pkt[8] = 0;
+  pkt[7] = 6; pkt[8] = getBatteryPercent();
   chr->setValue(pkt, sizeof(pkt));
   chr->notify();
 }
