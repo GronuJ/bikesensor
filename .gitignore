@@ -22,3 +22,6 @@ data/
 .pioenvs/
 .piolibdeps/
 .vscode/
+
+# AI Context
+GEMINI.md
