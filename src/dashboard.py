@@ -1,6 +1,7 @@
 """
-Dashboard: map heatmap of vibration band energy + click-to-see-spectrum.
+Multi-Ride Streamlit Dashboard: Aggregated maps, road quality heatmaps, and curb detection.
 
+Usage:
     uv run streamlit run src/dashboard.py
 """
 
@@ -8,6 +9,10 @@ from __future__ import annotations
 
 import os
 import sys
+import sqlite3
+import datetime
+import struct
+import shutil
 from pathlib import Path
 
 # Add project root to sys.path so we can import from src.*
@@ -19,142 +24,419 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from folium.plugins import HeatMap
-from scipy.signal import detrend, get_window
+from scipy.signal import detrend, get_window, butter, filtfilt
 from streamlit_folium import st_folium
 
 from src.merge import build as merge_build
+from src.db import get_all_rides, DB_PATH, add_ride, init_db
 
-DATA = Path("data")
-RAW_DATA = Path("raw_data")
+# Initialize DB on start
+init_db()
 
-st.set_page_config(page_title="Bike Sensor", layout="wide")
-st.title("Bike vibration map")
+st.set_page_config(page_title="Bikesensor IoT Dashboard", layout="wide", page_icon="🚴")
 
-# --- Section 1: Data Ingestion (Sidebar) ---
-# Allows the user to upload raw GPX and LightBlue CSV files.
-# The files are saved to raw_data/ and then processed by the merge pipeline.
-with st.sidebar.expander("Upload New Ride Data", expanded=not (DATA / "windows.csv").exists()):
-    st.markdown("Upload GPX tracks and LightBlue logs (CSV/TXT) here.")
+# Modern Styling
+st.markdown("""
+<style>
+    .reportview-container { background: #0f172a; }
+    .stMetric { border: 1px solid #1e293b; padding: 15px; border-radius: 10px; background-color: #1e293b; }
+    div[data-testid="metric-container"] { color: #f8fafc; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🚴 Bikesensor IoT Dashboard")
+st.markdown("Analyze road surface quality, explore bike vibration frequencies, and locate high curbs across your rides.")
+
+# --- Helper: Create Mock Data for Seamless Testing ---
+def generate_mock_ride(ride_date: datetime.datetime, prefix: str = "mock"):
+    """Generates a realistic mock ride and inserts it into the database."""
+    ride_id = f"ride_{prefix}_{ride_date.strftime('%Y%m%d_%H%M%S')}"
+    ride_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / ride_id
+    ride_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Create a mock GPX track wandering through Kiel/CAU Campus
+    gpx_tpl = """<?xml version="1.0" encoding="UTF-8"?>
+    <gpx version="1.1" creator="bikesensor_mock" xmlns="http://www.topografix.com/GPX/1/1">
+      <trk>
+        <trkseg>
+          {points}
+        </trkseg>
+      </trk>
+    </gpx>
+    """
+    pts = []
+    base_lat = 54.348 + np.random.uniform(-0.01, 0.01)
+    base_lon = 10.125 + np.random.uniform(-0.01, 0.01)
+    
+    num_samples = 250
+    for i in range(num_samples):
+        # Move in a slight diagonal
+        lat = base_lat + (i * 0.00005)
+        lon = base_lon + (i * 0.00008)
+        ele = 12.0 + np.sin(i / 10.0) * 2.0
+        ts = (ride_date + datetime.timedelta(seconds=i * 0.2)).isoformat() + "Z"
+        pts.append(f'<trkpt lat="{lat:.6f}" lon="{lon:.6f}"><time>{ts}</time><ele>{ele:.1f}</ele></trkpt>')
+        
+    gpx_data = gpx_tpl.format(points="\n".join(pts))
+    gpx_path = ride_dir / "raw_gps.gpx"
+    gpx_path.write_text(gpx_data, encoding="utf-8")
+    
+    # 2. Create raw BLE packets (with simulated vibrations and a couple of curbs)
+    # SYNC 1
+    sync1 = struct.pack("<BIHBB", 0xA5, 0, 250, 6, 0)
+    ble_packets = [{"Timestamp": ride_date.isoformat() + "Z", "Value": sync1.hex()}]
+    
+    for i in range(num_samples * 50): # ~10 samples per GPS tick, at 250Hz nominal
+        t_now = ride_date + datetime.timedelta(seconds=i * 0.004)
+        
+        # Simulate normal vibration + add a few sharp curb spikes (around index 2000 and 6000)
+        # Normal vibration around 0.1g, curbs around 2.2g
+        amp = 1500  # ~0.18g
+        if 2000 <= i <= 2010 or 6000 <= i <= 6010:
+            amp = 18000 # ~2.2g (Curb Spike!)
+            
+        # Z-axis standard gravity (8192 LSB) + AC vibration
+        az = int(8192 + np.random.normal(0, amp))
+        ax = int(np.random.normal(0, amp / 2))
+        ay = int(np.random.normal(0, amp / 2))
+        
+        data = struct.pack("<BIB", 0x5A, i, 1) + struct.pack(">hhhhhh", ax, ay, az, 0, 0, 0)
+        ble_packets.append({"Timestamp": t_now.isoformat() + "Z", "Value": data.hex()})
+        
+    # SYNC 2
+    sync2 = struct.pack("<BIHBB", 0xA5, num_samples * 50, 250, 6, 95) # 95% battery
+    ble_packets.append({"Timestamp": (ride_date + datetime.timedelta(seconds=num_samples * 0.2)).isoformat() + "Z", "Value": sync2.hex()})
+    
+    csv_path = ride_dir / "raw_imu.csv"
+    pd.DataFrame(ble_packets).to_csv(csv_path, index=False)
+    
+    # Run merge build
+    merge_build([gpx_path], [csv_path], ride_dir)
+    
+    # Add to DB
+    track_df = pd.read_csv(ride_dir / "track.csv")
+    track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
+    start_time = track_df["timestamp"].min().isoformat()
+    end_time = track_df["timestamp"].max().isoformat()
+    duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()
+    distance_m = float(track_df["cum_dist_m"].max())
+    avg_speed_kmh = float(track_df["speed_kmh"].mean())
+    
+    add_ride(
+        start_time=start_time,
+        end_time=end_time,
+        distance_m=distance_m,
+        duration_s=duration_s,
+        avg_speed_kmh=avg_speed_kmh,
+        file_path=str(ride_dir)
+    )
+
+# --- Sidebar: Multi-Ride Loading & Uploader ---
+st.sidebar.header("📂 Ride Data Manager")
+
+# Retrieve rides
+rides = get_all_rides()
+
+# Load mock data if requested or database is empty
+if len(rides) == 0:
+    st.sidebar.info("No rides found in your database. Click below to load some realistic mock rides!")
+    if st.sidebar.button("✨ Load Mock Rides"):
+        with st.spinner("Generating mock rides..."):
+            generate_mock_ride(datetime.datetime.now() - datetime.timedelta(days=1), "kiel_east")
+            generate_mock_ride(datetime.datetime.now(), "kiel_uni")
+            st.rerun()
+            
+with st.sidebar.expander("Upload New Ride", expanded=False):
+    st.markdown("Upload a GPX file and its matching BLE CSV/TXT log manually.")
     uploaded_files = st.file_uploader(
         "Select files", accept_multiple_files=True, type=["gpx", "csv", "txt"]
     )
-    if st.button("Process Uploaded Files") and uploaded_files:
-        RAW_DATA.mkdir(exist_ok=True)
-        gpx_paths = []
-        csv_paths = []
-        
+    if st.button("Process & Upload") and uploaded_files:
+        gpx_file = None
+        csv_file = None
         for f in uploaded_files:
-            file_path = RAW_DATA / f.name
-            with open(file_path, "wb") as out_f:
-                out_f.write(f.getbuffer())
-            
-            if f.name.lower().endswith(".gpx"):
-                gpx_paths.append(file_path)
-            elif f.name.lower().endswith((".csv", ".txt")):
-                csv_paths.append(file_path)
+            if f.name.endswith(".gpx"):
+                gpx_file = f
+            elif f.name.endswith((".csv", ".txt")):
+                csv_file = f
         
-        if not gpx_paths or not csv_paths:
-            st.error("Please upload at least one GPX and one CSV/TXT file.")
-        else:
-            with st.spinner("Processing ride data..."):
+        if gpx_file and csv_file:
+            with st.spinner("Processing..."):
                 try:
-                    # Run the merge.py pipeline
-                    merge_build(gpx_paths, csv_paths, DATA)
-                    st.success("Processing complete!")
+                    # Construct matching payload and POST to ourselves internally to reuse the API flow
+                    import requests
+                    payload = {
+                        "gpx_data": gpx_file.getvalue().decode("utf-8"),
+                        "ble_data": []
+                    }
+                    
+                    # Parse BLE file in memory to build payload
+                    import io
+                    df_ble_mem = pd.read_csv(io.BytesIO(csv_file.getvalue()), on_bad_lines="skip")
+                    tcol = next(c for c in df_ble_mem.columns if "time" in c.lower())
+                    vcol = next(c for c in df_ble_mem.columns if any(k in c.lower() for k in ("value", "hex", "data", "bytes")))
+                    
+                    for _, r in df_ble_mem.iterrows():
+                        payload["ble_data"].append({
+                            "timestamp": str(r[tcol]),
+                            "hex": str(r[vcol])
+                        })
+                    
+                    # Call API
+                    from fastapi.testclient import TestClient
+                    from src.server import app
+                    tc = TestClient(app)
+                    res = tc.post("/api/upload", json=payload)
+                    
+                    if res.status_code == 200:
+                        st.success("Ride imported successfully!")
+                        st.rerun()
+                    else:
+                        st.error(f"Error importing ride: {res.text}")
+                except Exception as e:
+                    st.error(f"Failed to parse uploaded files: {e}")
+        else:
+            st.error("Please select exactly one GPX and one CSV/TXT file.")
+
+# --- Sidebar: Pending Offline Wi-Fi Syncs ---
+pending_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / "pending_vibrations"
+pending_files = list(pending_dir.glob("*.csv")) if pending_dir.exists() else []
+
+if pending_files:
+    with st.sidebar.expander(f"📥 Pending Offline Rides ({len(pending_files)})", expanded=True):
+        st.markdown("Your ESP32 automatically synced these vibration logs over Wi-Fi. Upload your GPS GPX track to merge them!")
+        
+        selected_pending_file = st.selectbox(
+            "Select Vibration Log",
+            options=pending_files,
+            format_func=lambda x: f"📟 {x.name} ({x.stat().st_size/1024:.1f} KB)"
+        )
+        
+        uploaded_gpx = st.file_uploader("Upload GPX Track", type=["gpx"], key="pending_gpx")
+        
+        if st.button("Merge Offline Ride") and uploaded_gpx and selected_pending_file:
+            with st.spinner("Merging GPX and vibration files..."):
+                try:
+                    # 1. Create a unique ride ID directory
+                    timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    ride_id = f"ride_offline_{timestamp_str}"
+                    ride_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / ride_id
+                    ride_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # 2. Save GPX and copy the offline vibration CSV into the directory
+                    gpx_path = ride_dir / "raw_gps.gpx"
+                    gpx_path.write_bytes(uploaded_gpx.getvalue())
+                    
+                    csv_path = ride_dir / "raw_imu.csv"
+                    shutil.copy(selected_pending_file, csv_path)
+                    
+                    # 3. Call our merge_offline helper to align and process them!
+                    from src.merge import merge_offline
+                    paths = merge_offline(gpx_path, csv_path, ride_dir)
+                    
+                    # 4. Compute statistics
+                    track_df = pd.read_csv(paths["track"])
+                    track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
+                    start_time = track_df["timestamp"].min().isoformat()
+                    end_time = track_df["timestamp"].max().isoformat()
+                    duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()
+                    distance_m = float(track_df["cum_dist_m"].max())
+                    avg_speed_kmh = float(track_df["speed_kmh"].mean())
+                    
+                    # 5. Insert metadata into SQLite
+                    add_ride(
+                        start_time=start_time,
+                        end_time=end_time,
+                        distance_m=distance_m,
+                        duration_s=duration_s,
+                        avg_speed_kmh=avg_speed_kmh,
+                        file_path=str(ride_dir)
+                    )
+                    
+                    # 6. Delete the pending file since it's fully synced!
+                    selected_pending_file.unlink()
+                    
+                    st.success("Ride merged and synced successfully!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error during processing: {e}")
+                    st.error(f"Error merging files: {e}")
 
-if not (DATA / "windows.csv").exists():
-    st.info("No processed data found. Please upload your ride files using the sidebar to get started.")
-    st.stop()
+# Select ride dropdown
+ride_options = ["🌍 All Rides Combined"] + [
+    f"📅 {pd.to_datetime(r['start_time']).strftime('%Y-%m-%d %H:%M')} | {r['distance_m']/1000:.2f} km"
+    for r in rides
+]
+selected_ride_idx = st.sidebar.selectbox("Select Ride to Analyze", range(len(ride_options)), index=0)
 
-# --- Section 2: Load Processed Data ---
-windows = pd.read_csv(DATA / "windows.csv", parse_dates=["timestamp"])
-imu = pd.read_csv(DATA / "imu.csv", parse_dates=["timestamp"])
-
-# Sidebar controls for map visualization
+# Settings for map
 metric = st.sidebar.selectbox(
-    "Map metric",
-    ["max_bump_g", "band_mid_g", "band_low_g", "band_high_g", "rms_g", "speed_kmh", "peak_hz"],
+    "Vibration Heatmap Metric",
+    ["max_bump_g", "band_mid_g", "band_low_g", "band_high_g", "rms_g", "speed_kmh"],
     index=0,
 )
-radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 10)
+radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 12)
 
-# --- Section 3: KPIs (Key Performance Indicators) ---
-duration_min = (windows["timestamp"].max() - windows["timestamp"].min()).total_seconds() / 60
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Duration (min)", f"{duration_min:.1f}")
-c2.metric("Distance (km)", f"{windows['cum_dist_m'].max() / 1000:.2f}")
-c3.metric("Avg speed (km/h)", f"{windows['speed_kmh'].mean():.1f}")
-c4.metric(f"Mean {metric}", f"{windows[metric].mean():.3f}")
-if "battery_pct" in windows.columns:
-    batt_start = windows["battery_pct"].iloc[0]
-    batt_end = windows["battery_pct"].iloc[-1]
-    c5.metric("Battery", f"{batt_end:.0f}%", f"{batt_end - batt_start:.0f}%", delta_color="normal")
-else:
-    c5.metric("Battery", "N/A")
+# Curb configuration
+st.sidebar.markdown("---")
+st.sidebar.header("⚠️ Curb Detection Settings")
+curb_threshold = st.sidebar.slider("Curb Shock Threshold (g)", 0.8, 3.0, 1.4, step=0.1, help="Sudden vertical/vector shock threshold to identify curbs.")
+max_curb_speed = st.sidebar.slider("Max Speed for Curb (km/h)", 5, 25, 12, help="To avoid mistaking fast bumps for curbs, set the speed threshold below which a shock is flagged.")
 
-# --- Section 4: Main Layout (Tabs & Columns) ---
-tab_map, tab_route = st.tabs(["🗺️ Map Analysis", "📈 Route Overview"])
+# Load Data based on selection
+if len(rides) == 0:
+    st.info("Please use the sidebar to load mock data or upload a ride.")
+    st.stop()
+
+@st.cache_data
+def load_all_rides_data(selected_idx: int, rides_list: list):
+    """Loads and aggregates data frames based on multi or single ride selection."""
+    if selected_idx == 0:
+        # Load all rides
+        windows_df_list = []
+        track_df_list = []
+        imu_df_list = []
+        
+        for r in rides_list:
+            r_path = Path(r["file_path"])
+            if (r_path / "windows.csv").exists():
+                win = pd.read_csv(r_path / "windows.csv", parse_dates=["timestamp"])
+                win["ride_id"] = r["id"]
+                windows_df_list.append(win)
+            if (r_path / "track.csv").exists():
+                trk = pd.read_csv(r_path / "track.csv", parse_dates=["timestamp"])
+                trk["ride_id"] = r["id"]
+                track_df_list.append(trk)
+            if (r_path / "imu.csv").exists():
+                imu = pd.read_csv(r_path / "imu.csv", parse_dates=["timestamp"])
+                imu["ride_id"] = r["id"]
+                imu_df_list.append(imu)
+                
+        return (
+            pd.concat(windows_df_list).sort_values("timestamp").reset_index(drop=True),
+            pd.concat(track_df_list).sort_values("timestamp").reset_index(drop=True),
+            pd.concat(imu_df_list).sort_values("timestamp").reset_index(drop=True)
+        )
+    else:
+        # Load single ride
+        r = rides_list[selected_idx - 1]
+        r_path = Path(r["file_path"])
+        win = pd.read_csv(r_path / "windows.csv", parse_dates=["timestamp"])
+        trk = pd.read_csv(r_path / "track.csv", parse_dates=["timestamp"])
+        imu = pd.read_csv(r_path / "imu.csv", parse_dates=["timestamp"])
+        win["ride_id"] = r["id"]
+        trk["ride_id"] = r["id"]
+        imu["ride_id"] = r["id"]
+        return win, trk, imu
+
+windows, track, imu = load_all_rides_data(selected_ride_idx, rides)
+
+# --- KPIs (Key Performance Indicators) ---
+st.markdown("### 📊 Metrics")
+c1, c2, c3, c4 = st.columns(4)
+
+total_dist_km = windows["cum_dist_m"].max() / 1000 if selected_ride_idx != 0 else sum([r["distance_m"] for r in rides]) / 1000
+total_dur_min = (windows["timestamp"].max() - windows["timestamp"].min()).total_seconds() / 60 if selected_ride_idx != 0 else sum([r["duration_s"] for r in rides]) / 60
+avg_speed = windows["speed_kmh"].mean()
+peak_vibe = windows["max_bump_g"].max()
+
+c1.metric("Total Distance Ridden", f"{total_dist_km:.2f} km")
+c2.metric("Total Duration", f"{total_dur_min:.1f} min")
+c3.metric("Average Speed", f"{avg_speed:.1f} km/h")
+c4.metric(f"Peak Vibration (g)", f"{peak_vibe:.2f} g")
+
+# --- Layout: Tabs ---
+tab_map, tab_analytics = st.tabs(["🗺️ Unified Heatmap & Curb Map", "📈 Ride Analytics"])
 
 with tab_map:
-    map_col, plot_col = st.columns([1.5, 1], gap="large")
+    map_col, plot_col = st.columns([1.6, 1], gap="large")
     
     with map_col:
-        st.subheader("Vibration Heatmap")
-        st.markdown("Click anywhere on the route to see local vibration details.")
+        st.subheader("Interactive Map Analysis")
+        st.markdown("Colors represent road surface vibration levels. **Red warning markers indicate detected high curbs**.")
+        
+        # Center map
         mid_lat, mid_lon = windows["lat"].mean(), windows["lon"].mean()
         m = folium.Map(location=[mid_lat, mid_lon], zoom_start=14, tiles="CartoDB positron")
         
-        # Draw the ride track as a faint line
-        folium.PolyLine(
-            list(zip(windows["lat"], windows["lon"], strict=True)),
-            weight=3, opacity=0.5, color="#3b82f6",
-        ).add_to(m)
-        
-        # Heatmap Layer
+        # Plot Ride Tracks
+        # For multiple rides, group and draw separate lines
+        for ride_id, grp in windows.groupby("ride_id"):
+            folium.PolyLine(
+                list(zip(grp["lat"], grp["lon"], strict=True)),
+                weight=3, opacity=0.4, color="#3b82f6",
+                tooltip=f"Ride ID: {ride_id}"
+            ).add_to(m)
+            
+        # Draw Heatmap Layer
         v = windows[metric].to_numpy()
         lo, hi = np.nanpercentile(v, [5, 95])
         w = np.clip((v - lo) / (hi - lo + 1e-9), 0, 1)
+        
         HeatMap(
             list(zip(windows["lat"], windows["lon"], w, strict=True)),
             radius=radius, blur=radius, min_opacity=0.3,
         ).add_to(m)
         
-        # Clickable markers
-        stride = max(1, len(windows) // 400)
+        # Clickable Route Markers for Local Context (strided to avoid lag)
+        stride = max(1, len(windows) // 300)
         for _, row in windows.iloc[::stride].iterrows():
             folium.CircleMarker(
-                location=(row["lat"], row["lon"]), radius=4,
+                location=(row["lat"], row["lon"]), radius=3,
                 color=None, fill=True, fill_opacity=0.0,
-                tooltip=f"{row['timestamp'].strftime('%H:%M:%S')}<br>{metric}={row[metric]:.3f}<br>peak={row['peak_hz']:.1f} Hz",
+                tooltip=f"Time: {row['timestamp'].strftime('%H:%M:%S')}<br>{metric}: {row[metric]:.2f} g",
             ).add_to(m)
+            
+        # --- Curb Detection Implementation ---
+        # A curb is characterized by:
+        # 1. max_bump_g exceeds curb_threshold
+        # 2. vehicle speed is low (speed_kmh <= max_curb_speed)
+        curbs = windows[(windows["max_bump_g"] >= curb_threshold) & (windows["speed_kmh"] <= max_curb_speed)]
         
-        # Render map and capture click events
-        event = st_folium(m, height=700, width=None, returned_objects=["last_object_clicked"], use_container_width=True)
-
+        # To avoid putting a marker on contiguous windows for the same curb, we group close coordinates
+        if not curbs.empty:
+            st.sidebar.success(f"Detected {len(curbs)} High Curbs / Bumps!")
+            
+            for idx, c_row in curbs.iterrows():
+                folium.Marker(
+                    location=[c_row["lat"], c_row["lon"]],
+                    popup=f"⚠️ <b>High Curb / Severe Shock</b><br>Intensity: {c_row['max_bump_g']:.2f}g<br>Speed: {c_row['speed_kmh']:.1f} km/h<br>Time: {c_row['timestamp'].strftime('%H:%M:%S')}",
+                    icon=folium.Icon(color="red", icon="exclamation-sign", prefix="glyphicon")
+                ).add_to(m)
+        else:
+            st.sidebar.info("No curbs found at current settings.")
+            
+        # Render map in Streamlit
+        event = st_folium(m, height=650, width=None, returned_objects=["last_object_clicked"], use_container_width=True)
+        
     with plot_col:
-        # --- Section 5: Spectral Analysis (Context-Sensitive) ---
+        st.subheader("🔍 Local Detail & Spectrum")
+        
+        # Select focal window: either clicked by user or the highest vibration window
         clicked = event.get("last_object_clicked") if event else None
         if clicked:
             d = (windows["lat"] - clicked["lat"]) ** 2 + (windows["lon"] - clicked["lng"]) ** 2
             sel = windows.loc[d.idxmin()]
+            st.markdown(f"📍 **Selected Point (Clicked Map):**")
         else:
             sel = windows.loc[windows[metric].idxmax()]
+            st.markdown(f"🔥 **Point of Maximum Vibration (Default):**")
+            
+        st.markdown(f"""
+        * **Timestamp:** {sel['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}
+        * **{metric.replace('_', ' ').capitalize()}:** {sel[metric]:.2f} g
+        * **Speed:** {sel['speed_kmh']:.1f} km/h
+        * **Dominant Freq:** {sel.get('peak_hz', 0.0):.1f} Hz
+        """)
         
-        st.subheader("Local Analysis")
-        st.markdown(f"**Time:** {sel['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} &nbsp; | &nbsp; **{metric}:** {sel[metric]:.3f} g")
-        
-        # Extract the raw IMU samples for the selected window
+        # Segment out IMU samples around this window
+        sel_imu = imu[imu["ride_id"] == sel["ride_id"]]
         fs = float(sel["fs_hz"])
         win_n = int(sel["win_n"])
         center = pd.to_datetime(sel["timestamp"], utc=True)
         half = pd.Timedelta(seconds=win_n / fs / 2)
-        seg_imu = imu[(imu["timestamp"] >= center - half) & (imu["timestamp"] <= center + half)]
+        seg_imu = sel_imu[(sel_imu["timestamp"] >= center - half) & (sel_imu["timestamp"] <= center + half)]
         
         if len(seg_imu) >= 8:
-            # Recalculate PSD
             sig = np.sqrt(seg_imu["ax"] ** 2 + seg_imu["ay"] ** 2 + seg_imu["az"] ** 2).to_numpy() - 1.0
             sig = detrend(sig, type="constant")
             n = len(sig)
@@ -163,16 +445,15 @@ with tab_map:
             psd[1:-1] *= 2
             freqs = np.fft.rfftfreq(n, d=1.0 / fs)
             
-            # Frequency Domain Plot
+            # Frequency Spectrum PSD Plot
             fig_freq = px.line(x=freqs, y=np.sqrt(psd),
                                labels={"x": "Frequency (Hz)", "y": "g / √Hz"},
-                               log_y=True, title="Frequency Spectrum (PSD)",
-                               color_discrete_sequence=["#8b5cf6"])
-            fig_freq.update_layout(margin=dict(l=0, r=0, t=40, b=0), height=300)
+                               log_y=True, title="Power Spectral Density (Vibration Signature)",
+                               color_discrete_sequence=["#a855f7"])
+            fig_freq.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=250)
             st.plotly_chart(fig_freq, use_container_width=True)
-        
-            # Time-Domain Plot with Butterworth Filter
-            from scipy.signal import butter, filtfilt
+            
+            # Low-pass filter for time-domain bump view
             cutoff_hz = 25.0
             nyq = 0.5 * fs
             if cutoff_hz >= nyq:
@@ -181,41 +462,72 @@ with tab_map:
                 normal_cutoff = cutoff_hz / nyq
                 b, a = butter(4, normal_cutoff, btype='low', analog=False)
                 sig_filtered = filtfilt(b, a, sig)
-            
+                
             time_arr = (seg_imu["timestamp"] - seg_imu["timestamp"].iloc[0]).dt.total_seconds().to_numpy()
             
             df_time = pd.DataFrame({
                 "Time (s)": np.concatenate([time_arr, time_arr]),
                 "Acceleration (g)": np.concatenate([sig, sig_filtered]),
-                "Signal": ["Raw (Detrended)"] * len(time_arr) + ["Filtered (25Hz LP)"] * len(time_arr)
+                "Signal": ["Raw Vibration"] * len(time_arr) + ["Filtered (25Hz LP)"] * len(time_arr)
             })
             
             fig_time = px.line(df_time, x="Time (s)", y="Acceleration (g)", color="Signal",
-                               title="Time-Domain Signal (Bumps)",
+                               title="Time-Domain Bumps (Vertical acceleration)",
                                color_discrete_sequence=["#cbd5e1", "#ef4444"])
-            fig_time.update_layout(margin=dict(l=0, r=0, t=40, b=0), height=300, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            fig_time.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=250, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig_time, use_container_width=True)
-        
         else:
-            st.info("Not enough IMU samples around this point.")
+            st.info("Not enough raw IMU data around this location window to build frequency spectra.")
 
-with tab_route:
-    st.subheader("Vibration & Speed Along Route")
+with tab_analytics:
+    st.subheader("📈 Multi-Ride Vibration Spectrum & Comparison")
     
-    # --- Section 6: Distance Plots ---
-    route_col1, route_col2 = st.columns(2, gap="large")
-    
-    with route_col1:
-        fig_vib = px.line(windows, x="cum_dist_m",
-                          y=["band_low_g", "band_mid_g", "band_high_g"],
-                          labels={"cum_dist_m": "Distance (m)", "value": "g RMS", "variable": "Frequency Band"},
-                          title="Vibration Intensity by Distance")
-        fig_vib.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig_vib, use_container_width=True)
+    if selected_ride_idx != 0:
+        # Single Ride Distance Plots
+        col1, col2 = st.columns(2)
+        with col1:
+            fig_vib = px.line(windows, x="cum_dist_m",
+                              y=["band_low_g", "band_mid_g", "band_high_g"],
+                              labels={"cum_dist_m": "Distance (m)", "value": "g RMS", "variable": "Bands"},
+                              title="Vibration Levels along the Ride")
+            fig_vib.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            st.plotly_chart(fig_vib, use_container_width=True)
+        with col2:
+            fig_spd = px.line(windows, x="cum_dist_m", y="speed_kmh",
+                              labels={"cum_dist_m": "Distance (m)", "speed_kmh": "Speed (km/h)"},
+                              title="Riding Speed along the Ride",
+                              color_discrete_sequence=["#10b981"])
+            st.plotly_chart(fig_spd, use_container_width=True)
+    else:
+        # All Rides Aggregated View
+        st.markdown("### Ride Comparison")
+        # Generate summary stats per ride
+        summaries = []
+        for r in rides:
+            r_windows = windows[windows["ride_id"] == r["id"]]
+            if not r_windows.empty:
+                summaries.append({
+                    "Ride ID": f"Ride #{r['id']}",
+                    "Start Time": pd.to_datetime(r["start_time"]).strftime("%Y-%m-%d %H:%M"),
+                    "Distance (km)": r["distance_m"] / 1000.0,
+                    "Avg Speed (km/h)": r["avg_speed_kmh"],
+                    "Avg Vibration (g)": r_windows["rms_g"].mean(),
+                    "Max Shock (g)": r_windows["max_bump_g"].max()
+                })
         
-    with route_col2:
-        fig_speed = px.line(windows, x="cum_dist_m", y="speed_kmh",
-                            labels={"cum_dist_m": "Distance (m)", "speed_kmh": "Speed (km/h)"},
-                            title="Speed by Distance",
-                            color_discrete_sequence=["#10b981"])
-        st.plotly_chart(fig_speed, use_container_width=True)
+        if summaries:
+            summary_df = pd.DataFrame(summaries)
+            st.dataframe(summary_df, use_container_width=True)
+            
+            # Plot bar chart comparing average vibration
+            col1, col2 = st.columns(2)
+            with col1:
+                fig_comp_vib = px.bar(summary_df, x="Start Time", y="Avg Vibration (g)",
+                                      title="Average Road Roughness (g RMS) by Ride",
+                                      color="Avg Vibration (g)", color_continuous_scale="Purples")
+                st.plotly_chart(fig_comp_vib, use_container_width=True)
+            with col2:
+                fig_comp_spd = px.bar(summary_df, x="Start Time", y="Distance (km)",
+                                      title="Ride Distance (km) by Session",
+                                      color="Distance (km)", color_continuous_scale="Tealgrn")
+                st.plotly_chart(fig_comp_spd, use_container_width=True)

@@ -171,6 +171,152 @@ def build(gpx_paths: list[str | Path], csv_paths: list[str | Path],
     return paths
 
 
+def merge_offline(gpx_path: str | Path, offline_csv_path: str | Path,
+                  out_dir: str | Path = "data") -> dict[str, Path]:
+    """
+    Integrates a raw offline SD card vibration log (recorded in relative milliseconds)
+    with a GPX track file.
+    
+    1. Loads the GPX track to find the absolute start time.
+    2. Loads the offline SD card CSV and maps its relative 'millis' column to absolute timestamps.
+    3. Scales the raw MPU-6050 accelerometer counts to standard g units.
+    4. Computes STFT features and interpolates the GPS track onto the vibration time windows.
+    5. Saves the results as completed imu.csv, windows.csv, and track.csv.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True, parents=True)
+
+    # 1. Load and enrich the GPX track
+    print(f"Loading GPX Track: {gpx_path}")
+    raw_track = _load_gpx(gpx_path)
+    if raw_track.empty:
+        raise ValueError("Provided GPX track is empty.")
+    
+    track_concat = _enrich_track(raw_track)
+    gpx_start_time = track_concat["timestamp"].min()
+
+    # 2. Load the offline sensor data
+    print(f"Loading Offline Vibration Data: {offline_csv_path}")
+    imu = pd.read_csv(offline_csv_path)
+    if imu.empty:
+        raise ValueError("Provided offline vibration CSV is empty.")
+
+    # 3. Align the relative millis timeline with the absolute GPX start time
+    first_ms = imu["millis"].iloc[0]
+    dt_sec = (imu["millis"] - first_ms) / 1000.0
+    imu["timestamp"] = gpx_start_time + pd.to_timedelta(dt_sec, unit="s")
+
+    # 4. Scale raw sensor values to standard gravity (g)
+    ACC_SCALE = 1.0 / 8192.0 # ±4g range scale
+    imu["ax"] = imu["ax"] * ACC_SCALE
+    imu["ay"] = imu["ay"] * ACC_SCALE
+    imu["az"] = imu["az"] * ACC_SCALE
+    
+    # Offline logger saves space by skipping Gyro, fill with zeros
+    imu["gx"] = 0.0
+    imu["gy"] = 0.0
+    imu["gz"] = 0.0
+    imu["sample_idx"] = range(len(imu))
+
+    # 5. Run STFT DSP windowing
+    print("Executing STFT window analytics...")
+    win_concat = stft_features(imu)
+
+    # 6. Interpolate spatial coordinate points onto vibration timeframes
+    print("Interpolating GPS track coordinates to timeframes...")
+    geo = _interp_to(track_concat, win_concat["timestamp"])
+    windows = pd.concat([win_concat.reset_index(drop=True),
+                         geo.drop(columns="timestamp").reset_index(drop=True)], axis=1)
+    windows = windows.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+
+    paths = {
+        "imu": out_dir / "imu.csv",
+        "windows": out_dir / "windows.csv",
+        "track": out_dir / "track.csv",
+    }
+    imu.to_csv(paths["imu"], index=False)
+    windows.to_csv(paths["windows"], index=False)
+    track_concat.to_csv(paths["track"], index=False)
+    
+    print(f"Total offline merged: imu={len(imu)}  windows={len(windows)}  track={len(track_concat)}")
+    return paths
+
+
+def process_unified_offline(offline_csv_path: str | Path,
+                            out_dir: str | Path = "data") -> dict[str, Path]:
+    """
+    Processes a unified, pre-synced offline ride vibration log (which already contains
+    integrated GPS coordinates logged in-band by the NEO-6M module).
+    
+    1. Loads the CSV, scaling raw MPU-6050 counts to g's.
+    2. Interpolates the sparse 1Hz GPS coordinates onto the 100Hz vibration rows.
+    3. Extracts and enriches the GPS track for distance/speed calculations.
+    4. Computes STFT features and aligns coordinate sets to the timeframes.
+    5. Saves the output dataset files.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True, parents=True)
+
+    print(f"Loading Unified Standalone Ride Log: {offline_csv_path}")
+    imu = pd.read_csv(offline_csv_path)
+    if "lat" not in imu.columns or "lon" not in imu.columns:
+        raise ValueError("Provided CSV does not contain integrated GPS 'lat' and 'lon' columns.")
+
+    # 1. Assign absolute timestamps starting from current time
+    start_time = pd.Timestamp.now(tz="UTC")
+    first_ms = imu["millis"].iloc[0]
+    dt_sec = (imu["millis"] - first_ms) / 1000.0
+    imu["timestamp"] = start_time + pd.to_timedelta(dt_sec, unit="s")
+
+    # 2. Scale raw accelerometer counts
+    ACC_SCALE = 1.0 / 8192.0 # ±4g range scale
+    imu["ax"] = imu["ax"] * ACC_SCALE
+    imu["ay"] = imu["ay"] * ACC_SCALE
+    imu["az"] = imu["az"] * ACC_SCALE
+    
+    # Offline logger saves space by skipping Gyro, fill with zeros
+    imu["gx"] = 0.0
+    imu["gy"] = 0.0
+    imu["gz"] = 0.0
+    imu["sample_idx"] = range(len(imu))
+
+    # 3. Extract and enrich the GPS track subset
+    gps_fixes = imu.dropna(subset=["lat"]).copy()
+    if len(gps_fixes) < 2:
+         raise ValueError("Unified ride log does not contain enough valid GPS fixes (need at least 2).")
+    
+    gps_raw = gps_fixes[["timestamp", "lat", "lon", "ele"]].copy()
+    track_concat = _enrich_track(gps_raw)
+
+    # 4. In-band linear interpolation for empty coordinates in the high-frequency IMU rows
+    imu[["lat", "lon", "ele", "speed_kmh"]] = imu[["lat", "lon", "ele", "speed_kmh"]].interpolate(method="linear").ffill().bfill()
+
+    # 5. Run STFT DSP windowing
+    print("Executing STFT window analytics...")
+    win_concat = stft_features(imu)
+
+    # 6. Interpolate GPS track metrics onto timeframes
+    print("Interpolating GPS track coordinates to timeframes...")
+    geo = _interp_to(track_concat, win_concat["timestamp"])
+    windows = pd.concat([win_concat.reset_index(drop=True),
+                         geo.drop(columns="timestamp").reset_index(drop=True)], axis=1)
+    windows = windows.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+
+    paths = {
+        "imu": out_dir / "imu.csv",
+        "windows": out_dir / "windows.csv",
+        "track": out_dir / "track.csv",
+    }
+    imu.to_csv(paths["imu"], index=False)
+    windows.to_csv(paths["windows"], index=False)
+    track_concat.to_csv(paths["track"], index=False)
+    
+    print(f"Total unified offline processed: imu={len(imu)}  windows={len(windows)}  track={len(track_concat)}")
+    return paths
+
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merge GPX and LightBlue IMU CSV files.")
     parser.add_argument("--gpx", nargs="+", required=True, help="One or more GPX files, or directories containing GPX files.")
