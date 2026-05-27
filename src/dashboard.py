@@ -96,9 +96,9 @@ def generate_mock_ride(ride_date: datetime.datetime, prefix: str = "mock"):
             amp = 18000 # ~2.2g (Curb Spike!)
             
         # Z-axis standard gravity (8192 LSB) + AC vibration
-        az = int(8192 + np.random.normal(0, amp))
-        ax = int(np.random.normal(0, amp / 2))
-        ay = int(np.random.normal(0, amp / 2))
+        az = int(np.clip(8192 + np.random.normal(0, amp), -32768, 32767))
+        ax = int(np.clip(np.random.normal(0, amp / 2), -32768, 32767))
+        ay = int(np.clip(np.random.normal(0, amp / 2), -32768, 32767))
         
         data = struct.pack("<BIB", 0x5A, i, 1) + struct.pack(">hhhhhh", ax, ay, az, 0, 0, 0)
         ble_packets.append({"Timestamp": t_now.isoformat() + "Z", "Value": data.hex()})
@@ -131,7 +131,7 @@ def generate_mock_ride(ride_date: datetime.datetime, prefix: str = "mock"):
         file_path=str(ride_dir)
     )
 
-# --- Sidebar: Multi-Ride Loading & Uploader ---
+# --- Sidebar: Multi-Ride Loading ---
 st.sidebar.header("📂 Ride Data Manager")
 
 # Retrieve rides
@@ -145,58 +145,6 @@ if len(rides) == 0:
             generate_mock_ride(datetime.datetime.now() - datetime.timedelta(days=1), "kiel_east")
             generate_mock_ride(datetime.datetime.now(), "kiel_uni")
             st.rerun()
-            
-with st.sidebar.expander("Upload New Ride", expanded=False):
-    st.markdown("Upload a GPX file and its matching BLE CSV/TXT log manually.")
-    uploaded_files = st.file_uploader(
-        "Select files", accept_multiple_files=True, type=["gpx", "csv", "txt"]
-    )
-    if st.button("Process & Upload") and uploaded_files:
-        gpx_file = None
-        csv_file = None
-        for f in uploaded_files:
-            if f.name.endswith(".gpx"):
-                gpx_file = f
-            elif f.name.endswith((".csv", ".txt")):
-                csv_file = f
-        
-        if gpx_file and csv_file:
-            with st.spinner("Processing..."):
-                try:
-                    # Construct matching payload and POST to ourselves internally to reuse the API flow
-                    import requests
-                    payload = {
-                        "gpx_data": gpx_file.getvalue().decode("utf-8"),
-                        "ble_data": []
-                    }
-                    
-                    # Parse BLE file in memory to build payload
-                    import io
-                    df_ble_mem = pd.read_csv(io.BytesIO(csv_file.getvalue()), on_bad_lines="skip")
-                    tcol = next(c for c in df_ble_mem.columns if "time" in c.lower())
-                    vcol = next(c for c in df_ble_mem.columns if any(k in c.lower() for k in ("value", "hex", "data", "bytes")))
-                    
-                    for _, r in df_ble_mem.iterrows():
-                        payload["ble_data"].append({
-                            "timestamp": str(r[tcol]),
-                            "hex": str(r[vcol])
-                        })
-                    
-                    # Call API
-                    from fastapi.testclient import TestClient
-                    from src.server import app
-                    tc = TestClient(app)
-                    res = tc.post("/api/upload", json=payload)
-                    
-                    if res.status_code == 200:
-                        st.success("Ride imported successfully!")
-                        st.rerun()
-                    else:
-                        st.error(f"Error importing ride: {res.text}")
-                except Exception as e:
-                    st.error(f"Failed to parse uploaded files: {e}")
-        else:
-            st.error("Please select exactly one GPX and one CSV/TXT file.")
 
 # --- Sidebar: Pending Offline Wi-Fi Syncs ---
 pending_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / "pending_vibrations"
