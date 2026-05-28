@@ -1,52 +1,27 @@
-// ESP32-C3 Standalone GPS & Vibration Logger over SPI MicroSD with Auto-Wi-Fi Upload.
+// ESP32-C3 Real-Time GPS & Vibration Serial Debugger.
 //
 // Wiring (ESP32-C3 SuperMini):
 //   MPU-6050 (I2C): SDA->GPIO 6, SCL->GPIO 7
-//   MicroSD (SPI):  VCC->3V3, GND->GND, SCK->GPIO 4, MISO->GPIO 5, MOSI->GPIO 3, CS->GPIO 2
-//   NEO-6M (GPS):   VCC->3V3, GND->GND, TX->GPIO 10 (Connects to ESP32 RX), RX->GPIO 1 (Connects to ESP32 TX)
+//   NEO-6M (GPS):   VCC->3V3, GND->GND, TX->GPIO 10 (Connect to ESP32 RX), RX->GPIO 1 (Connect to ESP32 TX)
 //
 // Build: PlatformIO (firmware/platformio.ini), env esp32-c3-supermini.
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <SPI.h>
-#include <SD.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
 #include <TinyGPS++.h>
 
 // ---------- CONFIGURATION ----------
-static const char* WIFI_SSID = "YourHomeWiFi";       // Put your home Wi-Fi SSID here
-static const char* WIFI_PASS = "YourPassword";       // Put your home Wi-Fi Password here
-static const char* SERVER_URL = "http://192.168.178.50:8000/api/upload-offline"; // Your Mac's local network IP
-
-// SPI Pins for MicroSD Card Reader
-static constexpr uint8_t PIN_SPI_SCK  = 4;
-static constexpr uint8_t PIN_SPI_MISO = 5;
-static constexpr uint8_t PIN_SPI_MOSI = 3;
-static constexpr uint8_t PIN_SPI_CS   = 2;
-
-// UART Pins for NEO-6M GPS Module
-static constexpr uint8_t PIN_GPS_RX   = 10; // Connects to GPS TX
-static constexpr uint8_t PIN_GPS_TX   = 1;  // Connects to GPS RX
+static constexpr uint8_t PIN_GPS_RX = 10; // Connect to GPS TX
+static constexpr uint8_t PIN_GPS_TX = 1;  // Connect to GPS RX
 
 // MPU-6050 I2C Address
 static constexpr uint8_t MPU_ADDR = 0x68;
 
-// Logging Parameters
-static constexpr uint16_t SAMPLE_RATE_HZ = 100; // 100 Hz is plenty for road vibration + keeps file size small
-static constexpr uint32_t SAMPLE_INTERVAL_MS = 1000 / SAMPLE_RATE_HZ;
-
-// State Variables
-File logFile;
-char currentRideFilename[32];
-bool isLoggingActive = false;
-
-// GPS Object
+// GPS Object & Hardware Serial
 TinyGPSPlus gps;
 HardwareSerial GPSSerial(1); // Use hardware UART1
 
-// ---------- MPU-6050 ACCEL ONLY ----------
+// ---------- MPU-6050 FUNCTIONS ----------
 static void w8(uint8_t reg, uint8_t v) {
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(reg); Wire.write(v);
@@ -54,12 +29,12 @@ static void w8(uint8_t reg, uint8_t v) {
 }
 
 static void mpuInit() {
-  Wire.begin(6, 7, 400000); // SDA=GPIO 6, SCL=GPIO 7
+  Wire.begin(6, 7, 400000); // SDA=GPIO 6, SCL=GPIO 7 on ESP32-C3 SuperMini
   w8(0x6B, 0x80); delay(100); // Reset MPU-6050
   w8(0x6B, 0x01);             // Clock source PLL with X gyro
-  w8(0x1A, 0x03);             // DLPF CONFIG: Accel BW = 44Hz (Ideal filter for 100Hz sampling)
+  w8(0x1A, 0x03);             // DLPF CONFIG: Accel BW = 44Hz
   w8(0x1C, 0x08);             // ACCEL_CONFIG: Full scale range ±4 g
-  Serial.println("MPU-6050 initialized.");
+  Serial.println("MPU-6050 accelerometer initialized.");
 }
 
 static void readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
@@ -74,176 +49,69 @@ static void readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
   }
 }
 
-// ---------- WI-FI SYNC FUNCTION ----------
-bool attemptWiFiSync() {
-  Serial.print("Connecting to Wi-Fi: ");
-  Serial.println(WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  // Wait up to 10 seconds for Wi-Fi connection
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWi-Fi connection failed. Starting standalone logging mode!");
-    WiFi.disconnect(true);
-    return false;
-  }
-
-  Serial.println("\nConnected to home Wi-Fi!");
-  Serial.println("Checking SD card for offline rides to sync...");
-
-  // Open the root directory of the SD card to search for pending ride files
-  File root = SD.open("/");
-  if (!root) {
-    Serial.println("Failed to open SD card root directory.");
-    return true;
-  }
-
-  while (true) {
-    File entry = root.openNextFile();
-    if (!entry) break; // No more files
-
-    String filename = entry.name();
-    // Look for files starting with "ride_" and ending in ".csv"
-    if (filename.startsWith("ride_") && filename.endsWith(".csv")) {
-      Serial.printf("Found unsynced ride: %s. Uploading...\n", filename.c_str());
-      
-      HTTPClient http;
-      http.begin(SERVER_URL);
-      http.addHeader("Content-Type", "text/csv");
-      http.addHeader("X-Ride-Filename", filename);
-
-      // Read file content and stream it in the HTTP POST request body
-      int httpCode = http.sendRequest("POST", &entry);
-
-      if (httpCode == 200 || httpCode == 201) {
-        Serial.printf("✨ Upload success for %s! Server response: %s\n", filename.c_str(), http.getString().c_str());
-        http.end();
-        entry.close();
-        
-        // Remove or rename the file on the SD card so we don't upload it again
-        String path = "/" + filename;
-        SD.remove(path.c_str());
-        Serial.printf("Deleted synced file: %s\n", path.c_str());
-      } else {
-        Serial.printf("Upload failed for %s. HTTP code: %d, Response: %s\n", filename.c_str(), httpCode, http.getString().c_str());
-        http.end();
-        entry.close();
-      }
-    } else {
-      entry.close();
-    }
-  }
-  
-  root.close();
-  Serial.println("Offline ride sync sequence completed.");
-  return true;
-}
-
-// ---------- STANDALONE LOGGING ----------
-void startNewRideLogging() {
-  // Find a unique ride file name by incrementing indices
-  int rideIndex = 1;
-  while (true) {
-    snprintf(currentRideFilename, sizeof(currentRideFilename), "/ride_%03d.csv", rideIndex);
-    if (!SD.exists(currentRideFilename)) {
-      break; // Found a unique name!
-    }
-    rideIndex++;
-  }
-
-  Serial.printf("Creating new ride log file: %s\n", currentRideFilename);
-  logFile = SD.open(currentRideFilename, FILE_WRITE);
-  if (!logFile) {
-    Serial.println("❌ ERROR: Failed to create ride file on SD Card!");
-    return;
-  }
-
-  // Write CSV headers (vibration + in-band GPS columns!)
-  logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh");
-  logFile.flush();
-  isLoggingActive = true;
-  Serial.println("Ride logging active. Accelerometer and GPS recording started...");
-}
-
 void setup() {
+  // Initialize USB Serial Monitor
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("=== BIKESENSOR STANDALONE GPS + SD LOGGER ===");
-
-  // Initialize custom SPI for MicroSD Module
-  SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_CS);
-  if (!SD.begin(PIN_SPI_CS)) {
-    Serial.println("❌ ERROR: MicroSD card mounting failed! Check wiring.");
-    while (1) delay(100);
-  }
-  Serial.println("MicroSD card mounted successfully.");
-
-  // Check if we can sync with home Wi-Fi
-  bool synced = attemptWiFiSync();
+  delay(1500);
+  Serial.println("\n=== BIKESENSOR REAL-TIME GPS & IMU DEBUGGER ===");
 
   // Initialize NEO-6M GPS Module on UART1 (9600 Baud standard)
   GPSSerial.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
   Serial.println("NEO-6M GPS Module Serial Interface Started.");
 
-  // Initialize accelerometer and start logging
+  // Initialize Accelerometer
   mpuInit();
-  startNewRideLogging();
+
+  Serial.println("\nSetup Complete! Waiting for GPS Satellite Fix...");
+  Serial.println("Note: GPS modules can take 2-5 minutes to get a lock indoors. Try placing the antenna near a window!");
+  Serial.println("--------------------------------------------------------------------------------------------------");
 }
 
 void loop() {
-  // Process the incoming NMEA stream from the GPS module continuously
+  // Feed incoming NMEA data from the GPS module to TinyGPS++
   while (GPSSerial.available() > 0) {
     gps.encode(GPSSerial.read());
   }
 
-  if (!isLoggingActive) {
-    delay(1);
-    return;
-  }
-
-  static uint32_t lastSampleMs = 0;
+  static uint32_t lastPrintMs = 0;
   uint32_t now = millis();
 
-  // Exact periodic sampling interval
-  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
-    lastSampleMs = now;
-    
+  // Print diagnostics once per second (1 Hz)
+  if (now - lastPrintMs >= 1000) {
+    lastPrintMs = now;
+
+    // Read accelerometer
     int16_t ax, ay, az;
     readAccel(ax, ay, az);
 
-    // Format and write the data row directly as CSV
-    // Format: milliseconds, ax, ay, az, lat, lon, ele, speed_kmh
-    // To save huge amounts of SD card space, we only output GPS coordinates
-    // when a new valid location fix is received from the satellites!
-    if (gps.location.isUpdated() && gps.location.isValid()) {
+    // Convert raw IMU to g-units (±4g scale -> divide by 8192)
+    float ax_g = ax / 8192.0;
+    float ay_g = ay / 8192.0;
+    float az_g = az / 8192.0;
+
+    Serial.print("VIBRATION: ");
+    Serial.printf("X: %+6.2fg | Y: %+6.2fg | Z: %+6.2fg  ||  ", ax_g, ay_g, az_g);
+
+    // Print GPS Stats
+    Serial.print("GPS: ");
+    Serial.printf("Satellites: %2d | ", gps.satellites.value());
+
+    if (gps.location.isValid()) {
       double lat = gps.location.lat();
       double lon = gps.location.lng();
       double ele = gps.altitude.meters();
-      double speed = gps.speed.kmh();
-      
-      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f\n", now, ax, ay, az, lat, lon, ele, speed);
-      
-      // Flash the onboard LED (GPIO 8) briefly to indicate satellite lock
-      pinMode(8, OUTPUT);
-      digitalWrite(8, LOW); delay(5); digitalWrite(8, HIGH);
-    } else {
-      // Print empty commas for GPS columns when there is no new coordinate fix
-      logFile.printf("%lu,%d,%d,%d,,,,\n", now, ax, ay, az);
-    }
+      double speed = gps.speed.kmph();
 
-    // Periodic flush to prevent data loss in case of sudden power cutoff
-    static uint32_t lastFlushMs = 0;
-    if (now - lastFlushMs > 5000) {
-      logFile.flush();
-      lastFlushMs = now;
+      Serial.printf("FIX! Lat: %10.6f | Lon: %10.6f | Ele: %5.1fm | Speed: %5.1f km/h\n", 
+                    lat, lon, ele, speed);
+      
+      // Briefly flash onboard LED (GPIO 8) to indicate valid GPS fix
+      pinMode(8, OUTPUT);
+      digitalWrite(8, LOW); delay(10); digitalWrite(8, HIGH);
+    } else {
+      Serial.println("No Fix (searching satellites...)");
     }
   }
 
-  delay(1); // keeps loop snappy
+  delay(1); // snaps loop
 }
