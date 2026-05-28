@@ -94,7 +94,7 @@ void loop() {
 
     // Print GPS Stats
     Serial.print("GPS: ");
-    Serial.printf("Satellites: %2d | ", gps.satellites.value());
+    Serial.printf("Satellites: %2d | Chars: %lu | ", gps.satellites.value(), (unsigned long)gps.charsProcessed());
 
     if (gps.location.isValid()) {
       double lat = gps.location.lat();
