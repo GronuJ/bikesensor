@@ -288,8 +288,11 @@ def process_unified_offline(offline_csv_path: str | Path,
     gps_raw = gps_fixes[["timestamp", "lat", "lon", "ele"]].copy()
     track_concat = _enrich_track(gps_raw)
 
-    # 4. In-band linear interpolation for empty coordinates in the high-frequency IMU rows
-    imu[["lat", "lon", "ele", "speed_kmh"]] = imu[["lat", "lon", "ele", "speed_kmh"]].interpolate(method="linear").ffill().bfill()
+    # 4. In-band linear interpolation for empty coordinates and battery levels in the high-frequency IMU rows
+    cols_to_interp = ["lat", "lon", "ele", "speed_kmh"]
+    if "battery_pct" in imu.columns:
+        cols_to_interp.append("battery_pct")
+    imu[cols_to_interp] = imu[cols_to_interp].interpolate(method="linear").ffill().bfill()
 
     # 5. Run STFT DSP windowing
     print("Executing STFT window analytics...")

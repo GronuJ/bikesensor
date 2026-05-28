@@ -280,7 +280,12 @@ windows, track, imu = load_all_rides_data(selected_ride_idx, rides)
 
 # --- KPIs (Key Performance Indicators) ---
 st.markdown("### 📊 Metrics")
-c1, c2, c3, c4 = st.columns(4)
+show_battery = "battery_pct" in windows.columns and not windows["battery_pct"].isna().all()
+
+if show_battery:
+    c1, c2, c3, c4, c5 = st.columns(5)
+else:
+    c1, c2, c3, c4 = st.columns(4)
 
 total_dist_km = windows["cum_dist_m"].max() / 1000 if selected_ride_idx != 0 else sum([r["distance_m"] for r in rides]) / 1000
 total_dur_min = (windows["timestamp"].max() - windows["timestamp"].min()).total_seconds() / 60 if selected_ride_idx != 0 else sum([r["duration_s"] for r in rides]) / 60
@@ -291,6 +296,9 @@ c1.metric("Total Distance Ridden", f"{total_dist_km:.2f} km")
 c2.metric("Total Duration", f"{total_dur_min:.1f} min")
 c3.metric("Average Speed", f"{avg_speed:.1f} km/h")
 c4.metric(f"Peak Vibration (g)", f"{peak_vibe:.2f} g")
+
+if show_battery:
+    c5.metric("End Battery Level", f"{int(windows['battery_pct'].iloc[-1])}%")
 
 # --- Layout: Tabs ---
 tab_map, tab_analytics = st.tabs(["🗺️ Unified Heatmap & Curb Map", "📈 Ride Analytics"])
