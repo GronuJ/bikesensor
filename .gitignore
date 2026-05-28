@@ -25,3 +25,9 @@ data/
 
 # AI Context
 GEMINI.md
+
+# Private Credentials (never track in git)
+firmware/bikesensor/private_credentials.h
+
+# Local execution logs
+*.log
