@@ -196,7 +196,11 @@ c3.metric("Average Speed", f"{avg_speed:.1f} km/h")
 c4.metric(f"Peak Vibration (g)", f"{peak_vibe:.2f} g")
 
 if show_battery:
-    c5.metric("End Battery Level", f"{int(windows['battery_pct'].iloc[-1])}%")
+    valid_batt = windows["battery_pct"].dropna()
+    if not valid_batt.empty:
+        c5.metric("End Battery Level", f"{int(valid_batt.iloc[-1])}%")
+    else:
+        c5.metric("End Battery Level", "N/A")
 
 # --- Layout: Tabs ---
 tab_map, tab_analytics = st.tabs(["Unified Heatmap & Curb Map", "Ride Analytics"])
