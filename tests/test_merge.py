@@ -150,3 +150,49 @@ def test_process_unified_offline():
         shutil.rmtree(out_dir)
 
 
+def test_process_unified_offline_no_gps():
+    import tempfile
+    import shutil
+    from pathlib import Path
+    from src.merge import process_unified_offline
+
+    # Create dummy accel CSV data with NO valid GPS coordinates (0 fixes)
+    csv_rows = ["millis,ax,ay,az,lat,lon,ele,speed_kmh"]
+    for i in range(100):
+        # 10ms increments (100Hz)
+        millis = i * 10
+        csv_rows.append(f"{millis},0,0,8192,,,,")
+    csv_content = "\n".join(csv_rows)
+
+    with tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False) as csv_f:
+        csv_f.write(csv_content)
+        csv_path = csv_f.name
+
+    out_dir = Path(tempfile.mkdtemp())
+
+    try:
+        # This should execute successfully and use the fallback (Kiel CAU) rather than raising ValueError!
+        paths = process_unified_offline(csv_path, out_dir)
+        
+        assert (out_dir / "imu.csv").exists()
+        assert (out_dir / "windows.csv").exists()
+        assert (out_dir / "track.csv").exists()
+
+        imu_df = pd.read_csv(paths["imu"])
+        assert len(imu_df) == 100
+        
+        # Verify fallback location (Kiel CAU) was applied
+        assert imu_df["lat"].iloc[0] == 54.3486
+        assert imu_df["lon"].iloc[0] == 10.1176
+        
+        # Verify GPS track subset contains dummy points
+        track_df = pd.read_csv(paths["track"])
+        assert len(track_df) == 2
+        assert track_df["lat"].iloc[0] == 54.3486
+
+    finally:
+        Path(csv_path).unlink()
+        shutil.rmtree(out_dir)
+
+
+

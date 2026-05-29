@@ -299,9 +299,32 @@ def process_unified_offline(offline_csv_path: str | Path,
     # 3. Extract and enrich the GPS track subset
     gps_fixes = imu.dropna(subset=["lat"]).copy()
     if len(gps_fixes) < 2:
-         raise ValueError("Unified ride log does not contain enough valid GPS fixes (need at least 2).")
+         print("⚠️ Less than 2 GPS fixes found in unified log. Creating dummy track for vibration-only analysis.")
+         # If we have 1 fix, use it. Otherwise use Kiel CAU fallback
+         fallback_lat = 54.3486
+         fallback_lon = 10.1176
+         fallback_ele = 20.0
+         if len(gps_fixes) == 1:
+              fallback_lat = gps_fixes["lat"].iloc[0]
+              fallback_lon = gps_fixes["lon"].iloc[0]
+              fallback_ele = gps_fixes["ele"].iloc[0] if "ele" in gps_fixes.columns else 20.0
+         
+         # Create a dummy track with 2 points (at start and end of the ride)
+         start_ts = imu["timestamp"].iloc[0]
+         end_ts = imu["timestamp"].iloc[-1]
+         
+         gps_raw = pd.DataFrame([
+              {"timestamp": start_ts, "lat": fallback_lat, "lon": fallback_lon, "ele": fallback_ele},
+              {"timestamp": end_ts, "lat": fallback_lat, "lon": fallback_lon, "ele": fallback_ele}
+         ])
+         # Set gps_fixes in imu so that interpolation works
+         imu["lat"] = fallback_lat
+         imu["lon"] = fallback_lon
+         imu["ele"] = fallback_ele
+         imu["speed_kmh"] = 0.0
+    else:
+         gps_raw = gps_fixes[["timestamp", "lat", "lon", "ele"]].copy()
     
-    gps_raw = gps_fixes[["timestamp", "lat", "lon", "ele"]].copy()
     track_concat = _enrich_track(gps_raw)
  
     # 4. In-band linear interpolation for empty coordinates and battery levels in the high-frequency IMU rows

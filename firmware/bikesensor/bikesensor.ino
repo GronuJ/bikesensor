@@ -102,21 +102,27 @@ bool attemptWiFiSync() {
   WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  // Wait up to 10 seconds for Wi-Fi connection
+  // Wait up to 6 seconds for Wi-Fi connection with rapid visual LED feedback!
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
+  pinMode(8, OUTPUT);
+  while (WiFi.status() != WL_CONNECTED && attempts < 12) {
+    digitalWrite(8, LOW);  // Turn LED ON (active-low)
+    delay(100);
+    digitalWrite(8, HIGH); // Turn LED OFF
+    delay(400);
     Serial.print(".");
     attempts++;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nWi-Fi connection failed. Starting standalone logging mode!");
+    digitalWrite(8, HIGH); // Ensure LED is OFF
     WiFi.disconnect(true);
     return false;
   }
 
   Serial.println("\nConnected to home Wi-Fi!");
+  digitalWrite(8, LOW); // Turn LED solid ON to indicate active connected/syncing mode!
   Serial.println("Checking SD card for offline rides to sync...");
 
   // Open the root directory of the SD card to search for pending ride files
@@ -152,7 +158,8 @@ bool attemptWiFiSync() {
       continue;
     }
 
-    Serial.printf("Found unsynced ride: %s. Uploading...\n", filename.c_str());
+    size_t fileSize = entry.size();
+    Serial.printf("Found unsynced ride: %s (%u bytes). Uploading...\n", filename.c_str(), fileSize);
     
     // Safety guard: If the file is completely empty, delete it and skip upload
     if (entry.size() == 0) {
@@ -164,7 +171,7 @@ bool attemptWiFiSync() {
     
     HTTPClient http;
     http.begin(SERVER_URL);
-    http.setTimeout(60000); // 60-second read timeout to safely transfer large ride logs
+    http.setTimeout(65000); // 65-second read timeout (maximum safe uint16_t value) to safely transfer large ride logs
     http.addHeader("Content-Type", "text/csv");
     http.addHeader("X-Ride-Filename", filename);
 
@@ -187,6 +194,7 @@ bool attemptWiFiSync() {
   }
   
   Serial.println("Offline ride sync sequence completed.");
+  digitalWrite(8, HIGH); // Turn LED OFF when sync is fully completed!
   return true;
 }
 
@@ -223,16 +231,35 @@ void startNewRideLogging() {
   Serial.println("Ride logging active. Accelerometer and GPS recording started...");
 }
 
+// Latching GPS variables for race-free 1Hz satellite tracking
+static uint32_t lastGpsTimeVal = 0;
+static bool newGpsDataAvailable = false;
+static double lastLat = 0.0;
+static double lastLon = 0.0;
+static double lastEle = 0.0;
+static double lastSpeed = 0.0;
+static char lastGpsTime[32] = "";
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("=== BIKESENSOR STANDALONE GPS + SD LOGGER ===");
 
+  // Initialize onboard blue LED immediately and turn it OFF (active-low)
+  pinMode(8, OUTPUT);
+  digitalWrite(8, HIGH);
+
   // Initialize custom SPI for MicroSD Module
   SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_CS);
   if (!SD.begin(PIN_SPI_CS)) {
     Serial.println("❌ ERROR: MicroSD card mounting failed! Check wiring.");
-    while (1) delay(100);
+    // Hardware Alert: Rapidly flash the LED (100ms ON / 100ms OFF) to signal SD card failure
+    while (1) {
+      digitalWrite(8, LOW);  // ON
+      delay(100);
+      digitalWrite(8, HIGH); // OFF
+      delay(100);
+    }
   }
   Serial.println("MicroSD card mounted successfully.");
 
@@ -243,21 +270,61 @@ void setup() {
   GPSSerial.begin(115200, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
   Serial.println("NEO-6M GPS Module Serial Interface Started.");
 
-  // Initialize accelerometer and start logging
-  mpuInit();
+  // Initialize I2C bus and MPU-6050
+  Wire.begin(6, 7, 400000); // SDA=GPIO 6, SCL=GPIO 7
+  
+  // Verify that the accelerometer responds over I2C before proceeding
+  Wire.beginTransmission(MPU_ADDR);
+  if (Wire.endTransmission() != 0) {
+    Serial.println("❌ ERROR: MPU-6050 not responding at I2C address 0x68!");
+    // Hardware Alert: Double-flash LED rapidly (80ms ON / 80ms OFF) to signal IMU failure
+    while (1) {
+      digitalWrite(8, LOW);  // ON
+      delay(80);
+      digitalWrite(8, HIGH); // OFF
+      delay(80);
+    }
+  }
+
+  w8(0x6B, 0x80); delay(100); // Reset MPU-6050
+  w8(0x6B, 0x01);             // Clock source PLL with X gyro
+  w8(0x1A, 0x03);             // DLPF CONFIG: Accel BW = 44Hz (Ideal lowpass filter for 100Hz sampling)
+  w8(0x1C, 0x08);             // ACCEL_CONFIG: Full scale range ±4 g
+  Serial.println("MPU-6050 initialized.");
+
   startNewRideLogging();
 }
 
 void loop() {
-  // Process the incoming NMEA stream from the GPS module continuously
+  static bool gpsLockSignal = false;
+  uint32_t now = millis();
+
+  // 1. Process the incoming NMEA stream from the GPS module continuously
   while (GPSSerial.available() > 0) {
     gps.encode(GPSSerial.read());
   }
 
-  // Periodic battery diagnostic print (every 5 seconds) to Serial console
+  // 2. Check for a new GPS clock second tick. This is race-free, timing-insensitive,
+  // and completely bypasses any TinyGPS++ isUpdated() race conditions.
+  if (gps.location.isValid() && gps.date.isValid() && gps.time.isValid()) {
+    uint32_t currentGpsTimeVal = gps.time.value(); // Format: HHMMSSCC
+    if (currentGpsTimeVal != lastGpsTimeVal) {
+      lastGpsTimeVal = currentGpsTimeVal;
+      newGpsDataAvailable = true;
+      lastLat = gps.location.lat();
+      lastLon = gps.location.lng();
+      lastEle = gps.altitude.meters();
+      lastSpeed = gps.speed.kmph();
+      snprintf(lastGpsTime, sizeof(lastGpsTime), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+               gps.date.year(), gps.date.month(), gps.date.day(),
+               gps.time.hour(), gps.time.minute(), gps.time.second());
+    }
+  }
+
+  // 3. Periodic battery diagnostic print (every 5 seconds) to Serial console
   static uint32_t lastBattPrintMs = 0;
-  if (millis() - lastBattPrintMs > 5000) {
-    lastBattPrintMs = millis();
+  if (now - lastBattPrintMs > 5000) {
+    lastBattPrintMs = now;
     Serial.printf("[DIAGNOSTIC] Battery ADC: %d mV | Calculated: %u%%\n", analogReadMilliVolts(PIN_BATTERY), getBatteryPercent());
   }
 
@@ -266,38 +333,32 @@ void loop() {
     return;
   }
 
+  // 4. Strict 100Hz periodic sampling with phase-drift correction
   static uint32_t lastSampleMs = 0;
-  uint32_t now = millis();
-
-  // Exact periodic sampling interval
-  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
+  if (lastSampleMs == 0) {
     lastSampleMs = now;
+  }
+
+  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
+    // Keep strict phase alignment, but reset base if we are lagging severely (>100ms)
+    if (now - lastSampleMs > 100) {
+      lastSampleMs = now;
+    } else {
+      lastSampleMs += SAMPLE_INTERVAL_MS;
+    }
     
     int16_t ax, ay, az;
     readAccel(ax, ay, az);
 
     // Format and write the data row directly as CSV
-    // Format: milliseconds, ax, ay, az, lat, lon, ele, speed_kmh, battery_pct
-    // To save huge amounts of SD card space, we only output GPS and battery status
-    // when a new valid location fix is received from the satellites!
-    if (gps.location.isUpdated() && gps.location.isValid() && gps.date.isValid() && gps.time.isValid()) {
-      double lat = gps.location.lat();
-      double lon = gps.location.lng();
-      double ele = gps.altitude.meters();
-      double speed = gps.speed.kmph(); // TinyGPS++ speed method is kmph()
+    if (newGpsDataAvailable) {
+      newGpsDataAvailable = false; // Reset the latch
       uint8_t batt = getBatteryPercent(); // Live analog battery level
       
-      // Format the exact UTC clock time from satellite
-      char gpsTimeBuf[32];
-      snprintf(gpsTimeBuf, sizeof(gpsTimeBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-               gps.date.year(), gps.date.month(), gps.date.day(),
-               gps.time.hour(), gps.time.minute(), gps.time.second());
+      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f,%u,%s\n", now, ax, ay, az, lastLat, lastLon, lastEle, lastSpeed, batt, lastGpsTime);
       
-      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f,%u,%s\n", now, ax, ay, az, lat, lon, ele, speed, batt, gpsTimeBuf);
-      
-      // Flash the onboard LED (GPIO 8) briefly to indicate satellite lock
-      pinMode(8, OUTPUT);
-      digitalWrite(8, LOW); delay(5); digitalWrite(8, HIGH);
+      // Trigger non-blocking double-blink signal to indicate satellite lock
+      gpsLockSignal = true;
     } else {
       // Print empty commas for GPS, battery, and clock columns when there is no new coordinate fix
       logFile.printf("%lu,%d,%d,%d,,,,,,\n", now, ax, ay, az);
@@ -315,19 +376,46 @@ void loop() {
     }
   }
 
-  // Non-blocking 1-second visual heartbeat blink on onboard LED (GPIO 8) to show active logging even without GPS lock
-  static uint32_t lastHeartbeatMs = 0;
-  static bool ledState = false;
+  // 5. Visual LED Indicator system on GPIO 8 (2-Second Heartbeat vs. Rapid GPS Lock Double-Blink)
+  static uint32_t lastLEDMs = 0;
+  static int blinkPhase = 0; // 0 = idle, 1 = first blink on, 2 = first blink off, 3 = second blink on
+  
   if (isLoggingActive) {
-    if (now - lastHeartbeatMs > 1000) {
-      pinMode(8, OUTPUT);
-      digitalWrite(8, LOW); // Turn LED on (active-low)
-      lastHeartbeatMs = now;
-      ledState = true;
+    if (gpsLockSignal) {
+      gpsLockSignal = false;
+      blinkPhase = 1;
+      lastLEDMs = now;
+      digitalWrite(8, LOW); // Start first flash of GPS lock double-blink (active-low)
     }
-    if (ledState && now - lastHeartbeatMs > 20) {
-      digitalWrite(8, HIGH); // Turn LED off after 20ms
-      ledState = false;
+    
+    if (blinkPhase > 0) {
+      // Non-blocking double-blink animation for GPS lock:
+      // Phase 1 (ON): 15ms -> Phase 2 (OFF): 80ms -> Phase 3 (ON): 15ms -> Phase 0 (Idle)
+      if (blinkPhase == 1 && now - lastLEDMs > 15) {
+        digitalWrite(8, HIGH); // OFF
+        blinkPhase = 2;
+        lastLEDMs = now;
+      } else if (blinkPhase == 2 && now - lastLEDMs > 80) {
+        digitalWrite(8, LOW);  // ON
+        blinkPhase = 3;
+        lastLEDMs = now;
+      } else if (blinkPhase == 3 && now - lastLEDMs > 15) {
+        digitalWrite(8, HIGH); // OFF
+        blinkPhase = 0;        // Animation complete
+      }
+    } else {
+      // Idle phase: Slow steady 2-second heartbeat logging blink (short 15ms pulse)
+      static uint32_t lastHeartbeatMs = 0;
+      static bool ledHeartbeatState = false;
+      if (now - lastHeartbeatMs > 2000) {
+        digitalWrite(8, LOW); // ON
+        lastHeartbeatMs = now;
+        ledHeartbeatState = true;
+      }
+      if (ledHeartbeatState && now - lastHeartbeatMs > 15) {
+        digitalWrite(8, HIGH); // OFF
+        ledHeartbeatState = false;
+      }
     }
   }
 
