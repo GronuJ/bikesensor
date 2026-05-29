@@ -122,7 +122,7 @@ max_curb_speed = st.sidebar.slider("Max Speed for Curb (km/h)", 5, 25, 12, help=
 
 # Load Data based on selection
 if len(rides) == 0:
-    st.info("💡 **No rides found in your database yet!**\n\nPower on your ESP32 mapping box within range of your home Wi-Fi and it will automatically sync your rides. Alternatively, click **'✨ Load Mock Rides'** in the left sidebar to populate the dashboard with realistic test data!")
+    st.info("💡 **No rides found in your database yet!**\n\nPower on your ESP32 mapping box within range of your home Wi-Fi and it will automatically sync your rides.")
     st.stop()
 
 @st.cache_data

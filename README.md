@@ -99,7 +99,16 @@ sudo journalctl -u bikesensor-api.service -n 50 -f
 
 ---
 
-## 5. Local Network Endpoints
+## 5. Native macOS Sync Notifications (SSH Hook)
+
+To make ride syncing completely frictionless, the Pi homeserver is integrated with a local-only, secure SSH hook that immediately triggers a native macOS notification on your MacBook screen (`Josts-MacBook-Air.local`) upon successful processing.
+
+* **Frictionless Feedback:** As soon as you come home and your ESP32 uploads its files, your Mac slides out a notification chimes (**Glass** sound) notifying you of your synced distance, duration, and processed metrics.
+* **100% Secure & Local:** Communication operates passwordlessly using custom pre-authorized SSH keys (`~/.ssh/authorized_keys`) and standard macOS Remote Login. It fails gracefully (silently in background logs) if your Mac is away or offline, completely preserving system isolation.
+
+---
+
+## 6. Local Network Endpoints
 
 Once the servers are running on your homeserver, they are accessible from any device on your local Wi-Fi:
 

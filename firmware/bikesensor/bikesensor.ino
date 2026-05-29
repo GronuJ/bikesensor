@@ -247,6 +247,13 @@ void loop() {
     gps.encode(GPSSerial.read());
   }
 
+  // Periodic battery diagnostic print (every 5 seconds) to Serial console
+  static uint32_t lastBattPrintMs = 0;
+  if (millis() - lastBattPrintMs > 5000) {
+    lastBattPrintMs = millis();
+    Serial.printf("[DIAGNOSTIC] Battery ADC: %d mV | Calculated: %u%%\n", analogReadMilliVolts(PIN_BATTERY), getBatteryPercent());
+  }
+
   if (!isLoggingActive) {
     delay(1);
     return;
