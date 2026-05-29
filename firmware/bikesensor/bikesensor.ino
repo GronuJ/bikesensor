@@ -211,7 +211,14 @@ void startNewRideLogging() {
 
   // Write CSV headers (vibration + in-band GPS + battery + satellite clock columns!)
   logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time");
-  logFile.flush();
+  logFile.close(); // Force directory entry size update!
+  
+  logFile = SD.open(currentRideFilename, FILE_APPEND);
+  if (!logFile) {
+    Serial.println("❌ ERROR: Failed to reopen ride file in append mode after header creation!");
+    return;
+  }
+  
   isLoggingActive = true;
   Serial.println("Ride logging active. Accelerometer and GPS recording started...");
 }
@@ -296,10 +303,14 @@ void loop() {
       logFile.printf("%lu,%d,%d,%d,,,,,,\n", now, ax, ay, az);
     }
 
-    // Periodic flush to prevent data loss in case of sudden power cutoff
+    // Periodic close and reopen (syncing FAT directory entry file size) to prevent data loss in case of sudden power cutoff
     static uint32_t lastFlushMs = 0;
     if (now - lastFlushMs > 5000) {
-      logFile.flush();
+      logFile.close();
+      logFile = SD.open(currentRideFilename, FILE_APPEND);
+      if (!logFile) {
+        Serial.println("❌ ERROR: Failed to reopen ride file in append mode!");
+      }
       lastFlushMs = now;
     }
   }
