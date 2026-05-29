@@ -247,13 +247,16 @@ async def upload_offline(
             csv_path = ride_dir / "raw_imu.csv"
             csv_path.write_text(csv_content, encoding="utf-8")
             
-            # Queue the heavy STFT, filtering, and database operations in a background task
-            background_tasks.add_task(
-                process_unified_offline_background,
-                csv_path,
-                ride_dir,
-                ride_id,
-                x_ride_filename
+            # Queue the heavy STFT, filtering, and database operations in an immediate asyncio task
+            import asyncio
+            asyncio.create_task(
+                asyncio.to_thread(
+                    process_unified_offline_background,
+                    csv_path,
+                    ride_dir,
+                    ride_id,
+                    x_ride_filename
+                )
             )
             
             print(f"Successfully received and queued unified offline file: {x_ride_filename} (processing in background)")
