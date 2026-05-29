@@ -262,8 +262,24 @@ def process_unified_offline(offline_csv_path: str | Path,
     if "lat" not in imu.columns or "lon" not in imu.columns:
         raise ValueError("Provided CSV does not contain integrated GPS 'lat' and 'lon' columns.")
 
-    # 1. Assign absolute timestamps starting from current time
-    start_time = pd.Timestamp.now(tz="UTC")
+    # 1. Assign absolute timestamps
+    # If the file has integrated gps_time, use the first valid GPS clock time!
+    start_time = None
+    if "gps_time" in imu.columns and not imu["gps_time"].isna().all():
+         try:
+              first_gps_row = imu.dropna(subset=["gps_time"]).iloc[0]
+              gps_clock = pd.Timestamp(first_gps_row["gps_time"])
+              # Subtract the millis offset of this row to calculate the absolute start_time at millis=0
+              offset_sec = (first_gps_row["millis"] - imu["millis"].iloc[0]) / 1000.0
+              start_time = gps_clock - pd.to_timedelta(offset_sec, unit="s")
+              print(f"⏰ [GPS Clock] Detected absolute ride start time from satellite: {start_time}")
+         except Exception as ex_time:
+              print(f"⚠️ Could not parse GPS clock time: {ex_time}")
+              
+    if start_time is None:
+         start_time = pd.Timestamp.now(tz="UTC")
+         print(f"⚠️ [System Clock] No GPS clock found. Using system sync time: {start_time}")
+
     first_ms = imu["millis"].iloc[0]
     dt_sec = (imu["millis"] - first_ms) / 1000.0
     imu["timestamp"] = start_time + pd.to_timedelta(dt_sec, unit="s")

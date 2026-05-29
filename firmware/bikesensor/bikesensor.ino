@@ -209,8 +209,8 @@ void startNewRideLogging() {
     return;
   }
 
-  // Write CSV headers (vibration + in-band GPS + battery columns!)
-  logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct");
+  // Write CSV headers (vibration + in-band GPS + battery + satellite clock columns!)
+  logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time");
   logFile.flush();
   isLoggingActive = true;
   Serial.println("Ride logging active. Accelerometer and GPS recording started...");
@@ -273,21 +273,27 @@ void loop() {
     // Format: milliseconds, ax, ay, az, lat, lon, ele, speed_kmh, battery_pct
     // To save huge amounts of SD card space, we only output GPS and battery status
     // when a new valid location fix is received from the satellites!
-    if (gps.location.isUpdated() && gps.location.isValid()) {
+    if (gps.location.isUpdated() && gps.location.isValid() && gps.date.isValid() && gps.time.isValid()) {
       double lat = gps.location.lat();
       double lon = gps.location.lng();
       double ele = gps.altitude.meters();
       double speed = gps.speed.kmph(); // TinyGPS++ speed method is kmph()
       uint8_t batt = getBatteryPercent(); // Live analog battery level
       
-      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f,%u\n", now, ax, ay, az, lat, lon, ele, speed, batt);
+      // Format the exact UTC clock time from satellite
+      char gpsTimeBuf[32];
+      snprintf(gpsTimeBuf, sizeof(gpsTimeBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+               gps.date.year(), gps.date.month(), gps.date.day(),
+               gps.time.hour(), gps.time.minute(), gps.time.second());
+      
+      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f,%u,%s\n", now, ax, ay, az, lat, lon, ele, speed, batt, gpsTimeBuf);
       
       // Flash the onboard LED (GPIO 8) briefly to indicate satellite lock
       pinMode(8, OUTPUT);
       digitalWrite(8, LOW); delay(5); digitalWrite(8, HIGH);
     } else {
-      // Print empty commas for GPS and battery columns when there is no new coordinate fix
-      logFile.printf("%lu,%d,%d,%d,,,,,\n", now, ax, ay, az);
+      // Print empty commas for GPS, battery, and clock columns when there is no new coordinate fix
+      logFile.printf("%lu,%d,%d,%d,,,,,,\n", now, ax, ay, az);
     }
 
     // Periodic flush to prevent data loss in case of sudden power cutoff
