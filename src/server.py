@@ -156,11 +156,11 @@ def send_mac_notification(ride_id: str, distance_m: float, duration_s: float):
         dur_min = duration_s / 60.0
         msg = f"Ride synced successfully! Mapped {dist_km:.2f} km in {dur_min:.1f} minutes."
         
-        # Display native macOS notification with AppleScript
-        cmd = f'osascript -e \'display notification "{msg}" with title "🚴 Bikesensor Sync" sound name "Glass"\''
+        # Display native macOS notification with AppleScript and force play the Glass sound directly via afplay for fail-safe audibility
+        cmd = f'osascript -e \'display notification "{msg}" with title "🚴 Bikesensor Sync"\'; afplay /System/Library/Sounds/Glass.aiff'
         mac_ssh.exec_command(cmd)
         mac_ssh.close()
-        print("✅ [Background] Sent native macOS notification to Josts-Air.local")
+        print("✅ [Background] Sent native macOS notification and audio chime to Josts-Air.local")
     except Exception as e:
         print(f"[Background] Could not send macOS notification: {e} (Remote Login / SSH might be disabled on your Mac)")
 
