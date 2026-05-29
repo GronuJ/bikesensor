@@ -14,6 +14,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <TinyGPS++.h>
+#include <vector>
 
 // ---------- CONFIGURATION ----------
 #if __has_include("private_credentials.h")
@@ -39,6 +40,9 @@ static constexpr uint8_t PIN_GPS_TX   = 1;  // Connects to GPS RX
 // MPU-6050 I2C Address
 static constexpr uint8_t MPU_ADDR = 0x68;
 
+// Battery Divider Pin
+static constexpr uint8_t PIN_BATTERY = 0;
+
 // Logging Parameters
 static constexpr uint16_t SAMPLE_RATE_HZ = 100; // 100 Hz vibration sampling is ideal for road surface PSD
 static constexpr uint32_t SAMPLE_INTERVAL_MS = 1000 / SAMPLE_RATE_HZ;
@@ -51,6 +55,15 @@ bool isLoggingActive = false;
 // GPS Object
 TinyGPSPlus gps;
 HardwareSerial GPSSerial(1); // Use hardware UART1
+
+// ---------- BATTERY MEASUREMENT ----------
+static uint8_t getBatteryPercent() {
+  float mv = analogReadMilliVolts(PIN_BATTERY) * 2.0; 
+  float voltage = mv / 1000.0;
+  if (voltage >= 4.2) return 100;
+  if (voltage <= 3.3) return 0;
+  return (uint8_t)(((voltage - 3.3) / (4.2 - 3.3)) * 100.0); 
+}
 
 // ---------- MPU-6050 ACCEL ONLY ----------
 static void w8(uint8_t reg, uint8_t v) {
@@ -113,43 +126,57 @@ bool attemptWiFiSync() {
     return true;
   }
 
+  // 1. Safe Collector Stage: Read filenames first to avoid modifying the directory 
+  // structure while iterating, which can corrupt index pointers in the SD library.
+  std::vector<String> filesToSync;
   while (true) {
     File entry = root.openNextFile();
     if (!entry) break; // No more files
 
     String filename = entry.name();
-    // Look for files starting with "ride_" and ending in ".csv"
     if (filename.startsWith("ride_") && filename.endsWith(".csv")) {
-      Serial.printf("Found unsynced ride: %s. Uploading...\n", filename.c_str());
+      filesToSync.push_back(filename);
+    }
+    entry.close();
+  }
+  root.close();
+
+  Serial.printf("Found %u unsynced ride(s) on the SD Card.\n", filesToSync.size());
+
+  // 2. Ingestion & Cleanup Stage: Loop through collected filenames to upload and delete sequentially
+  for (const String& filename : filesToSync) {
+    String path = "/" + filename;
+    File entry = SD.open(path.c_str(), FILE_READ);
+    if (!entry) {
+      Serial.printf("❌ Error: Could not open file for uploading: %s\n", path.c_str());
+      continue;
+    }
+
+    Serial.printf("Found unsynced ride: %s. Uploading...\n", filename.c_str());
+    
+    HTTPClient http;
+    http.begin(SERVER_URL);
+    http.addHeader("Content-Type", "text/csv");
+    http.addHeader("X-Ride-Filename", filename);
+
+    // Read file content and stream it in the HTTP POST request body
+    int httpCode = http.sendRequest("POST", &entry);
+
+    if (httpCode == 200 || httpCode == 201) {
+      Serial.printf("✨ Upload success for %s! Server response: %s\n", filename.c_str(), http.getString().c_str());
+      http.end();
+      entry.close();
       
-      HTTPClient http;
-      http.begin(SERVER_URL);
-      http.addHeader("Content-Type", "text/csv");
-      http.addHeader("X-Ride-Filename", filename);
-
-      // Read file content and stream it in the HTTP POST request body
-      int httpCode = http.sendRequest("POST", &entry);
-
-      if (httpCode == 200 || httpCode == 201) {
-        Serial.printf("✨ Upload success for %s! Server response: %s\n", filename.c_str(), http.getString().c_str());
-        http.end();
-        entry.close();
-        
-        // Remove or rename the file on the SD card so we don't upload it again
-        String path = "/" + filename;
-        SD.remove(path.c_str());
-        Serial.printf("Deleted synced file: %s\n", path.c_str());
-      } else {
-        Serial.printf("Upload failed for %s. HTTP code: %d, Response: %s\n", filename.c_str(), httpCode, http.getString().c_str());
-        http.end();
-        entry.close();
-      }
+      // Remove the file on the SD card so we don't upload it again
+      SD.remove(path.c_str());
+      Serial.printf("Deleted synced file: %s\n", path.c_str());
     } else {
+      Serial.printf("Upload failed for %s. HTTP code: %d, Response: %s\n", filename.c_str(), httpCode, http.getString().c_str());
+      http.end();
       entry.close();
     }
   }
   
-  root.close();
   Serial.println("Offline ride sync sequence completed.");
   return true;
 }
@@ -173,8 +200,8 @@ void startNewRideLogging() {
     return;
   }
 
-  // Write CSV headers (vibration + in-band GPS columns!)
-  logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh");
+  // Write CSV headers (vibration + in-band GPS + battery columns!)
+  logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct");
   logFile.flush();
   isLoggingActive = true;
   Serial.println("Ride logging active. Accelerometer and GPS recording started...");
@@ -227,23 +254,24 @@ void loop() {
     readAccel(ax, ay, az);
 
     // Format and write the data row directly as CSV
-    // Format: milliseconds, ax, ay, az, lat, lon, ele, speed_kmh
-    // To save huge amounts of SD card space, we only output GPS coordinates
+    // Format: milliseconds, ax, ay, az, lat, lon, ele, speed_kmh, battery_pct
+    // To save huge amounts of SD card space, we only output GPS and battery status
     // when a new valid location fix is received from the satellites!
     if (gps.location.isUpdated() && gps.location.isValid()) {
       double lat = gps.location.lat();
       double lon = gps.location.lng();
       double ele = gps.altitude.meters();
       double speed = gps.speed.kmph(); // TinyGPS++ speed method is kmph()
+      uint8_t batt = getBatteryPercent(); // Live analog battery level
       
-      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f\n", now, ax, ay, az, lat, lon, ele, speed);
+      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f,%u\n", now, ax, ay, az, lat, lon, ele, speed, batt);
       
       // Flash the onboard LED (GPIO 8) briefly to indicate satellite lock
       pinMode(8, OUTPUT);
       digitalWrite(8, LOW); delay(5); digitalWrite(8, HIGH);
     } else {
-      // Print empty commas for GPS columns when there is no new coordinate fix
-      logFile.printf("%lu,%d,%d,%d,,,,\n", now, ax, ay, az);
+      // Print empty commas for GPS and battery columns when there is no new coordinate fix
+      logFile.printf("%lu,%d,%d,%d,,,,,\n", now, ax, ay, az);
     }
 
     // Periodic flush to prevent data loss in case of sudden power cutoff
