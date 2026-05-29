@@ -137,15 +137,18 @@ def load_all_rides_data(selected_idx: int, rides_list: list):
         for r in rides_list:
             r_path = Path(r["file_path"])
             if (r_path / "windows.csv").exists():
-                win = pd.read_csv(r_path / "windows.csv", parse_dates=["timestamp"])
+                win = pd.read_csv(r_path / "windows.csv")
+                win["timestamp"] = pd.to_datetime(win["timestamp"], format="mixed", utc=True)
                 win["ride_id"] = r["id"]
                 windows_df_list.append(win)
             if (r_path / "track.csv").exists():
-                trk = pd.read_csv(r_path / "track.csv", parse_dates=["timestamp"])
+                trk = pd.read_csv(r_path / "track.csv")
+                trk["timestamp"] = pd.to_datetime(trk["timestamp"], format="mixed", utc=True)
                 trk["ride_id"] = r["id"]
                 track_df_list.append(trk)
             if (r_path / "imu.csv").exists():
-                imu = pd.read_csv(r_path / "imu.csv", parse_dates=["timestamp"])
+                imu = pd.read_csv(r_path / "imu.csv")
+                imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
                 imu["ride_id"] = r["id"]
                 imu_df_list.append(imu)
                 
@@ -158,23 +161,20 @@ def load_all_rides_data(selected_idx: int, rides_list: list):
         # Load single ride
         r = rides_list[selected_idx - 1]
         r_path = Path(r["file_path"])
-        win = pd.read_csv(r_path / "windows.csv", parse_dates=["timestamp"])
-        trk = pd.read_csv(r_path / "track.csv", parse_dates=["timestamp"])
-        imu = pd.read_csv(r_path / "imu.csv", parse_dates=["timestamp"])
+        win = pd.read_csv(r_path / "windows.csv")
+        trk = pd.read_csv(r_path / "track.csv")
+        imu = pd.read_csv(r_path / "imu.csv")
+        
+        win["timestamp"] = pd.to_datetime(win["timestamp"], format="mixed", utc=True)
+        trk["timestamp"] = pd.to_datetime(trk["timestamp"], format="mixed", utc=True)
+        imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
+        
         win["ride_id"] = r["id"]
         trk["ride_id"] = r["id"]
         imu["ride_id"] = r["id"]
         return win, trk, imu
 
 windows, track, imu = load_all_rides_data(selected_ride_idx, rides)
-
-# Ensure timestamps are parsed as UTC datetimes robustly
-if not windows.empty:
-    windows["timestamp"] = pd.to_datetime(windows["timestamp"], format="mixed", utc=True)
-if not track.empty:
-    track["timestamp"] = pd.to_datetime(track["timestamp"], format="mixed", utc=True)
-if not imu.empty:
-    imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
 
 # --- KPIs (Key Performance Indicators) ---
 st.markdown("### 📊 Metrics")
