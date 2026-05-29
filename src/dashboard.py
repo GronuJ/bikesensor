@@ -11,7 +11,6 @@ import os
 import sys
 import sqlite3
 import datetime
-import struct
 import shutil
 from pathlib import Path
 
@@ -47,104 +46,13 @@ st.markdown("""
 st.title("🚴 Bikesensor IoT Dashboard")
 st.markdown("Analyze road surface quality, explore bike vibration frequencies, and locate high curbs across your rides.")
 
-# --- Helper: Create Mock Data for Seamless Testing ---
-def generate_mock_ride(ride_date: datetime.datetime, prefix: str = "mock"):
-    """Generates a realistic mock ride and inserts it into the database."""
-    ride_id = f"ride_{prefix}_{ride_date.strftime('%Y%m%d_%H%M%S')}"
-    ride_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / ride_id
-    ride_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 1. Create a mock GPX track wandering through Kiel/CAU Campus
-    gpx_tpl = """<?xml version="1.0" encoding="UTF-8"?>
-    <gpx version="1.1" creator="bikesensor_mock" xmlns="http://www.topografix.com/GPX/1/1">
-      <trk>
-        <trkseg>
-          {points}
-        </trkseg>
-      </trk>
-    </gpx>
-    """
-    pts = []
-    base_lat = 54.348 + np.random.uniform(-0.01, 0.01)
-    base_lon = 10.125 + np.random.uniform(-0.01, 0.01)
-    
-    num_samples = 250
-    for i in range(num_samples):
-        # Move in a slight diagonal
-        lat = base_lat + (i * 0.00005)
-        lon = base_lon + (i * 0.00008)
-        ele = 12.0 + np.sin(i / 10.0) * 2.0
-        ts = (ride_date + datetime.timedelta(seconds=i * 0.2)).isoformat() + "Z"
-        pts.append(f'<trkpt lat="{lat:.6f}" lon="{lon:.6f}"><time>{ts}</time><ele>{ele:.1f}</ele></trkpt>')
-        
-    gpx_data = gpx_tpl.format(points="\n".join(pts))
-    gpx_path = ride_dir / "raw_gps.gpx"
-    gpx_path.write_text(gpx_data, encoding="utf-8")
-    
-    # 2. Create raw BLE packets (with simulated vibrations and a couple of curbs)
-    # SYNC 1
-    sync1 = struct.pack("<BIHBB", 0xA5, 0, 250, 6, 0)
-    ble_packets = [{"Timestamp": ride_date.isoformat() + "Z", "Value": sync1.hex()}]
-    
-    for i in range(num_samples * 50): # ~10 samples per GPS tick, at 250Hz nominal
-        t_now = ride_date + datetime.timedelta(seconds=i * 0.004)
-        
-        # Simulate normal vibration + add a few sharp curb spikes (around index 2000 and 6000)
-        # Normal vibration around 0.1g, curbs around 2.2g
-        amp = 1500  # ~0.18g
-        if 2000 <= i <= 2010 or 6000 <= i <= 6010:
-            amp = 18000 # ~2.2g (Curb Spike!)
-            
-        # Z-axis standard gravity (8192 LSB) + AC vibration
-        az = int(np.clip(8192 + np.random.normal(0, amp), -32768, 32767))
-        ax = int(np.clip(np.random.normal(0, amp / 2), -32768, 32767))
-        ay = int(np.clip(np.random.normal(0, amp / 2), -32768, 32767))
-        
-        data = struct.pack("<BIB", 0x5A, i, 1) + struct.pack(">hhhhhh", ax, ay, az, 0, 0, 0)
-        ble_packets.append({"Timestamp": t_now.isoformat() + "Z", "Value": data.hex()})
-        
-    # SYNC 2
-    sync2 = struct.pack("<BIHBB", 0xA5, num_samples * 50, 250, 6, 95) # 95% battery
-    ble_packets.append({"Timestamp": (ride_date + datetime.timedelta(seconds=num_samples * 0.2)).isoformat() + "Z", "Value": sync2.hex()})
-    
-    csv_path = ride_dir / "raw_imu.csv"
-    pd.DataFrame(ble_packets).to_csv(csv_path, index=False)
-    
-    # Run merge build
-    merge_build([gpx_path], [csv_path], ride_dir)
-    
-    # Add to DB
-    track_df = pd.read_csv(ride_dir / "track.csv")
-    track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
-    start_time = track_df["timestamp"].min().isoformat()
-    end_time = track_df["timestamp"].max().isoformat()
-    duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()
-    distance_m = float(track_df["cum_dist_m"].max())
-    avg_speed_kmh = float(track_df["speed_kmh"].mean())
-    
-    add_ride(
-        start_time=start_time,
-        end_time=end_time,
-        distance_m=distance_m,
-        duration_s=duration_s,
-        avg_speed_kmh=avg_speed_kmh,
-        file_path=str(ride_dir)
-    )
+
 
 # --- Sidebar: Multi-Ride Loading ---
 st.sidebar.header("📂 Ride Data Manager")
 
 # Retrieve rides
 rides = get_all_rides()
-
-# Load mock data if requested or database is empty
-if len(rides) == 0:
-    st.sidebar.info("No rides found in your database. Click below to load some realistic mock rides!")
-    if st.sidebar.button("✨ Load Mock Rides"):
-        with st.spinner("Generating mock rides..."):
-            generate_mock_ride(datetime.datetime.now() - datetime.timedelta(days=1), "kiel_east")
-            generate_mock_ride(datetime.datetime.now(), "kiel_uni")
-            st.rerun()
 
 # --- Sidebar: Reset & Cleanup Manager ---
 if len(rides) > 0:
