@@ -83,10 +83,16 @@ if len(rides) > 0:
                 st.error(f"Error resetting database: {e}")
 
 # Select ride dropdown
-ride_options = ["🌍 All Rides Combined"] + [
-    f"📅 {pd.to_datetime(r['start_time']).strftime('%Y-%m-%d %H:%M')} | {r['distance_m']/1000:.2f} km"
-    for r in rides
-]
+ride_options = ["🌍 All Rides Combined"]
+for i, r in enumerate(rides):
+    # Convert UTC timestamp to local system timezone dynamically
+    dt_local = pd.to_datetime(r['start_time']).astimezone()
+    dt_str = dt_local.strftime('%Y-%m-%d %H:%M')
+    label = f"📅 {dt_str} | {r['distance_m']/1000:.2f} km"
+    if i == 0:
+        label += " (Latest)"
+    ride_options.append(label)
+
 selected_ride_idx = st.sidebar.selectbox("Select Ride to Analyze", range(len(ride_options)), index=0)
 
 # Settings for map
