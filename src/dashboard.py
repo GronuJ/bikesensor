@@ -13,6 +13,7 @@ import sqlite3
 import datetime
 import shutil
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Add project root to sys.path so we can import from src.*
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -85,8 +86,8 @@ if len(rides) > 0:
 # Select ride dropdown
 ride_options = ["🌍 All Rides Combined"]
 for i, r in enumerate(rides):
-    # Convert UTC timestamp to local system timezone dynamically
-    dt_local = pd.to_datetime(r['start_time']).to_pydatetime().astimezone()
+    # Convert UTC timestamp to Europe/Berlin timezone explicitly
+    dt_local = pd.to_datetime(r['start_time']).to_pydatetime().astimezone(ZoneInfo('Europe/Berlin'))
     dt_str = dt_local.strftime('%Y-%m-%d %H:%M')
     label = f"📅 {dt_str} | {r['distance_m']/1000:.2f} km"
     if i == 0:
