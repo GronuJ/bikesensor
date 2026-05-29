@@ -111,6 +111,9 @@ def stft_features(imu: pd.DataFrame) -> pd.DataFrame:
         row["peak_hz"] = float(freqs[m][np.argmax(psd[m])]) if m.any() else 0.0
         rows.append(row)
 
+    if not rows:
+        raise ValueError("Ride is too short to analyze (not enough samples for a single STFT window).")
+
     out = pd.DataFrame(rows)
     out["timestamp"] = pd.to_datetime(out["t_center_ns"], utc=True)
     out["win_n"] = cfg.win_n

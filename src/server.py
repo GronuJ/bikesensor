@@ -89,7 +89,7 @@ async def upload_ride(payload: RideUploadPayload):
             raise ValueError("Merged GPS track dataset is empty.")
 
         # Ensure timestamp column is parsed as datetime
-        track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
+        track_df["timestamp"] = pd.to_datetime(track_df["timestamp"], format="mixed")
         
         start_time = track_df["timestamp"].min().isoformat()
         end_time = track_df["timestamp"].max().isoformat()
@@ -174,7 +174,7 @@ def process_unified_offline_background(csv_path: Path, ride_dir: Path, ride_id: 
         # Extract statistics from the merged track dataset
         import pandas as pd
         track_df = pd.read_csv(paths["track"])
-        track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
+        track_df["timestamp"] = pd.to_datetime(track_df["timestamp"], format="mixed")
         start_time = track_df["timestamp"].min().isoformat()
         end_time = track_df["timestamp"].max().isoformat()
         duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()

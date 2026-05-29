@@ -154,18 +154,20 @@ def test_upload_offline_unified():
     # 4. Verify SQLite Database Record
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT * FROM rides WHERE id = ?", (res_data["db_id"],)).fetchone()
+    row = conn.execute("SELECT * FROM rides WHERE file_path = ?", (str(ride_dir),)).fetchone()
     conn.close()
 
     assert row is not None
     assert row["file_path"] == str(ride_dir)
     assert row["distance_m"] > 0
+    db_id = row["id"]
 
     # 5. Clean up
     shutil.rmtree(ride_dir)
     conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("DELETE FROM rides WHERE id = ?", (res_data["db_id"],))
+    conn.execute("DELETE FROM rides WHERE id = ?", (db_id,))
     conn.commit()
     conn.close()
+
 
 
