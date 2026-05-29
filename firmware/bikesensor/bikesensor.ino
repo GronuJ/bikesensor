@@ -315,5 +315,21 @@ void loop() {
     }
   }
 
+  // Non-blocking 1-second visual heartbeat blink on onboard LED (GPIO 8) to show active logging even without GPS lock
+  static uint32_t lastHeartbeatMs = 0;
+  static bool ledState = false;
+  if (isLoggingActive) {
+    if (now - lastHeartbeatMs > 1000) {
+      pinMode(8, OUTPUT);
+      digitalWrite(8, LOW); // Turn LED on (active-low)
+      lastHeartbeatMs = now;
+      ledState = true;
+    }
+    if (ledState && now - lastHeartbeatMs > 20) {
+      digitalWrite(8, HIGH); // Turn LED off after 20ms
+      ledState = false;
+    }
+  }
+
   delay(1); // keeps loop snappy
 }
