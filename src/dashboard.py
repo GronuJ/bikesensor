@@ -87,7 +87,7 @@ if len(rides) > 0:
 ride_options = ["🌍 All Rides Combined"]
 for i, r in enumerate(rides):
     # Convert UTC timestamp to Europe/Berlin timezone explicitly
-    dt_local = pd.to_datetime(r['start_time']).to_pydatetime().astimezone(ZoneInfo('Europe/Berlin'))
+    dt_local = pd.to_datetime(r['start_time'], format='mixed', utc=True).to_pydatetime().astimezone(ZoneInfo('Europe/Berlin'))
     dt_str = dt_local.strftime('%Y-%m-%d %H:%M')
     label = f"📅 {dt_str} | {r['distance_m']/1000:.2f} km"
     if i == 0:
@@ -167,6 +167,14 @@ def load_all_rides_data(selected_idx: int, rides_list: list):
         return win, trk, imu
 
 windows, track, imu = load_all_rides_data(selected_ride_idx, rides)
+
+# Ensure timestamps are parsed as UTC datetimes robustly
+if not windows.empty:
+    windows["timestamp"] = pd.to_datetime(windows["timestamp"], format="mixed", utc=True)
+if not track.empty:
+    track["timestamp"] = pd.to_datetime(track["timestamp"], format="mixed", utc=True)
+if not imu.empty:
+    imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
 
 # --- KPIs (Key Performance Indicators) ---
 st.markdown("### 📊 Metrics")
@@ -358,7 +366,7 @@ with tab_analytics:
             if not r_windows.empty:
                 summaries.append({
                     "Ride ID": f"Ride #{r['id']}",
-                    "Start Time": pd.to_datetime(r["start_time"]).strftime("%Y-%m-%d %H:%M"),
+                    "Start Time": pd.to_datetime(r["start_time"], format='mixed', utc=True).strftime("%Y-%m-%d %H:%M"),
                     "Distance (km)": r["distance_m"] / 1000.0,
                     "Avg Speed (km/h)": r["avg_speed_kmh"],
                     "Avg Vibration (g)": r_windows["rms_g"].mean(),
