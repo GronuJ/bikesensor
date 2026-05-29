@@ -135,34 +135,33 @@ async def upload_ride(payload: RideUploadPayload):
         raise HTTPException(status_code=500, detail=f"Failed to process ride: {str(e)}")
 
 def send_mac_notification(ride_id: str, distance_m: float, duration_s: float):
-    """Sends a native macOS notification to the MacBook Josts-MacBook-Air.local over SSH."""
+    """Sends a focus-respecting native macOS notification to the MacBook Josts-MacBook-Air.local over HTTP."""
     try:
-        import paramiko
-        # Connect to MacBook Josts-MacBook-Air.local using ssh keys
-        mac_ssh = paramiko.SSHClient()
-        mac_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        import urllib.request
+        import urllib.parse
         
-        # Connect dynamically utilizing active local SSH keys/agent
-        mac_ssh.connect(
-            "Josts-MacBook-Air.local",
-            username="jostjens",
-            timeout=3,
-            allow_agent=True,
-            look_for_keys=True
-        )
-        
-        # Format notification text
         dist_km = distance_m / 1000.0
         dur_min = duration_s / 60.0
         msg = f"Ride synced successfully! Mapped {dist_km:.2f} km in {dur_min:.1f} minutes."
         
-        # Display native macOS notification inside the user's active GUI session so it respects Focus Modes
-        cmd = f'launchctl asuser 501 osascript -e \'display notification "{msg}" with title "🚴 Bikesensor Sync" sound name "Glass"\''
-        mac_ssh.exec_command(cmd)
-        mac_ssh.close()
-        print("✅ [Background] Sent native macOS GUI notification to Josts-Air.local")
+        # URL encode parameters
+        params = urllib.parse.urlencode({
+            'msg': msg,
+            'title': '🚴 Bikesensor Sync',
+            'sound': 'Glass'
+        })
+        url = f"http://Josts-MacBook-Air.local:8089/?{params}"
+        
+        # Send HTTP request (3-second timeout)
+        req = urllib.request.Request(url, method='GET')
+        with urllib.request.urlopen(req, timeout=3) as response:
+            if response.status == 200:
+                print("✅ [Background] Sent native focus-respecting notification via Mac Listener")
+            else:
+                print(f"[Background] Mac Listener returned status: {response.status}")
+                
     except Exception as e:
-        print(f"[Background] Could not send macOS notification: {e} (Remote Login / SSH might be disabled on your Mac)")
+        print(f"[Background] Could not send macOS notification via HTTP: {e} (Is the Mac asleep or the listener stopped?)")
 
 def process_unified_offline_background(csv_path: Path, ride_dir: Path, ride_id: str, x_ride_filename: str):
     """Heavy vibration detrending, SciPy STFT, and SQLite DB insertion executed asynchronously."""
