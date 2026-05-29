@@ -86,7 +86,7 @@ if len(rides) > 0:
 ride_options = ["🌍 All Rides Combined"]
 for i, r in enumerate(rides):
     # Convert UTC timestamp to local system timezone dynamically
-    dt_local = pd.to_datetime(r['start_time']).astimezone()
+    dt_local = pd.to_datetime(r['start_time']).to_pydatetime().astimezone()
     dt_str = dt_local.strftime('%Y-%m-%d %H:%M')
     label = f"📅 {dt_str} | {r['distance_m']/1000:.2f} km"
     if i == 0:
