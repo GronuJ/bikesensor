@@ -341,19 +341,38 @@ with tab_analytics:
     st.subheader("📈 Multi-Ride Vibration Spectrum & Comparison")
     
     if selected_ride_idx != 0:
-        # Single Ride Distance Plots
+        # User toggle for X-Axis plotting (especially useful for stationary/table tests)
+        plot_x_mode = st.radio(
+            "Select X-Axis for Plots:",
+            options=["📏 Distance along Track (meters)", "⏱️ Elapsed Time (seconds)"],
+            index=0,
+            horizontal=True,
+            help="For stationary/table tests, Elapsed Time is highly recommended since static GPS drift can falsely accumulate distance."
+        )
+        
+        # Prepare plotting variables based on selection
+        if "Distance" in plot_x_mode:
+            x_col = "cum_dist_m"
+            x_label = "Distance (m)"
+        else:
+            # Calculate elapsed seconds from the start of this specific ride log
+            windows["elapsed_s"] = (windows["timestamp"] - windows["timestamp"].min()).dt.total_seconds()
+            x_col = "elapsed_s"
+            x_label = "Time (seconds)"
+            
+        # Single Ride Plots
         col1, col2 = st.columns(2)
         with col1:
-            fig_vib = px.line(windows, x="cum_dist_m",
+            fig_vib = px.line(windows, x=x_col,
                               y=["band_low_g", "band_mid_g", "band_high_g"],
-                              labels={"cum_dist_m": "Distance (m)", "value": "g RMS", "variable": "Bands"},
-                              title="Vibration Levels along the Ride")
+                              labels={x_col: x_label, "value": "g RMS", "variable": "Bands"},
+                              title=f"Vibration Levels over {x_label}")
             fig_vib.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig_vib, use_container_width=True)
         with col2:
-            fig_spd = px.line(windows, x="cum_dist_m", y="speed_kmh",
-                              labels={"cum_dist_m": "Distance (m)", "speed_kmh": "Speed (km/h)"},
-                              title="Riding Speed along the Ride",
+            fig_spd = px.line(windows, x=x_col, y="speed_kmh",
+                              labels={x_col: x_label, "speed_kmh": "Speed (km/h)"},
+                              title=f"Riding Speed over {x_label}",
                               color_discrete_sequence=["#10b981"])
             st.plotly_chart(fig_spd, use_container_width=True)
     else:
