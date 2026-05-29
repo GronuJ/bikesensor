@@ -164,6 +164,7 @@ bool attemptWiFiSync() {
     
     HTTPClient http;
     http.begin(SERVER_URL);
+    http.setTimeout(60000); // 60-second read timeout to safely transfer large ride logs
     http.addHeader("Content-Type", "text/csv");
     http.addHeader("X-Ride-Filename", filename);
 

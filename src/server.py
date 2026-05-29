@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
@@ -134,9 +134,85 @@ async def upload_ride(payload: RideUploadPayload):
         print(f"Error processing ride: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process ride: {str(e)}")
 
+def send_mac_notification(ride_id: str, distance_m: float, duration_s: float):
+    """Sends a native macOS notification to the MacBook Josts-MacBook-Air.local over SSH."""
+    try:
+        import paramiko
+        # Connect to MacBook Josts-MacBook-Air.local using ssh keys
+        mac_ssh = paramiko.SSHClient()
+        mac_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        # Connect dynamically utilizing active local SSH keys/agent
+        mac_ssh.connect(
+            "Josts-MacBook-Air.local",
+            username="jostjens",
+            timeout=3,
+            allow_agent=True,
+            look_for_keys=True
+        )
+        
+        # Format notification text
+        dist_km = distance_m / 1000.0
+        dur_min = duration_s / 60.0
+        msg = f"Ride synced successfully! Mapped {dist_km:.2f} km in {dur_min:.1f} minutes."
+        
+        # Display native macOS notification with AppleScript
+        cmd = f'osascript -e \'display notification "{msg}" with title "🚴 Bikesensor Sync" sound name "Glass"\''
+        mac_ssh.exec_command(cmd)
+        mac_ssh.close()
+        print("✅ [Background] Sent native macOS notification to Josts-Air.local")
+    except Exception as e:
+        print(f"[Background] Could not send macOS notification: {e} (Remote Login / SSH might be disabled on your Mac)")
+
+def process_unified_offline_background(csv_path: Path, ride_dir: Path, ride_id: str, x_ride_filename: str):
+    """Heavy vibration detrending, SciPy STFT, and SQLite DB insertion executed asynchronously."""
+    try:
+        print(f"🔄 [Background] Starting STFT & DSP analysis for {x_ride_filename}...")
+        from src.merge import process_unified_offline
+        paths = process_unified_offline(csv_path, ride_dir)
+        
+        # Extract statistics from the merged track dataset
+        import pandas as pd
+        track_df = pd.read_csv(paths["track"])
+        track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
+        start_time = track_df["timestamp"].min().isoformat()
+        end_time = track_df["timestamp"].max().isoformat()
+        duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()
+        distance_m = float(track_df["cum_dist_m"].max())
+        avg_speed_kmh = float(track_df["speed_kmh"].mean())
+        
+        # Add to database
+        db_id = add_ride(
+            start_time=start_time,
+            end_time=end_time,
+            distance_m=distance_m,
+            duration_s=duration_s,
+            avg_speed_kmh=avg_speed_kmh,
+            file_path=str(ride_dir)
+        )
+        print(f"✨ [Background] Auto-processed unified GPS ride: {ride_id} (DB ID: {db_id})")
+        
+        # Trigger native macOS notification
+        send_mac_notification(ride_id, distance_m, duration_s)
+        
+    except ValueError as ve:
+        print(f"[Background] Ignoring invalid unified offline file {x_ride_filename}: {ve}")
+        if csv_path.exists():
+            csv_path.unlink()
+        if ride_dir.exists() and not any(ride_dir.iterdir()):
+            ride_dir.rmdir()
+    except Exception as e:
+        print(f"[Background] Error processing offline file {x_ride_filename}: {e}")
+        # Clean up files if anything fails
+        if csv_path.exists():
+            csv_path.unlink()
+        if ride_dir.exists() and not any(ride_dir.iterdir()):
+            ride_dir.rmdir()
+
 @app.post("/api/upload-offline")
 async def upload_offline(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_ride_filename: str = Header(...)
 ):
     """
@@ -171,42 +247,19 @@ async def upload_offline(
             csv_path = ride_dir / "raw_imu.csv"
             csv_path.write_text(csv_content, encoding="utf-8")
             
-            # Call process_unified_offline to interpolate and run STFT analytics
-            try:
-                from src.merge import process_unified_offline
-                paths = process_unified_offline(csv_path, ride_dir)
-            except ValueError as ve:
-                print(f"Ignoring invalid unified offline file {x_ride_filename}: {ve}")
-                if csv_path.exists():
-                    csv_path.unlink()
-                if ride_dir.exists() and not any(ride_dir.iterdir()):
-                    ride_dir.rmdir()
-                return {"status": "ignored", "message": str(ve)}
-            
-            # Extract statistics from the merged track dataset
-            track_df = pd.read_csv(paths["track"])
-            track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
-            start_time = track_df["timestamp"].min().isoformat()
-            end_time = track_df["timestamp"].max().isoformat()
-            duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()
-            distance_m = float(track_df["cum_dist_m"].max())
-            avg_speed_kmh = float(track_df["speed_kmh"].mean())
-            
-            # Add to database
-            db_id = add_ride(
-                start_time=start_time,
-                end_time=end_time,
-                distance_m=distance_m,
-                duration_s=duration_s,
-                avg_speed_kmh=avg_speed_kmh,
-                file_path=str(ride_dir)
+            # Queue the heavy STFT, filtering, and database operations in a background task
+            background_tasks.add_task(
+                process_unified_offline_background,
+                csv_path,
+                ride_dir,
+                ride_id,
+                x_ride_filename
             )
             
-            print(f"✨ Auto-processed unified GPS ride: {ride_id} (DB ID: {db_id})")
+            print(f"Successfully received and queued unified offline file: {x_ride_filename} (processing in background)")
             return {
                 "status": "success",
-                "message": f"Ride {ride_id} auto-processed and registered successfully.",
-                "db_id": db_id,
+                "message": f"Ride {ride_id} received successfully. Processing is running in the background.",
                 "ride_id": ride_id
             }
         else:
