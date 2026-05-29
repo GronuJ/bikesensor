@@ -61,5 +61,13 @@ def get_ride_by_id(ride_id: int) -> Optional[Dict[str, Any]]:
         row = conn.execute("SELECT * FROM rides WHERE id = ?", (ride_id,)).fetchone()
         return dict(row) if row else None
 
+def clear_db() -> None:
+    """Deletes all ride records and resets the auto-increment counter."""
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM rides")
+        conn.execute("DELETE FROM sqlite_sequence WHERE name='rides'")
+        conn.commit()
+    print("Database cleared successfully.")
+
 if __name__ == "__main__":
     init_db()

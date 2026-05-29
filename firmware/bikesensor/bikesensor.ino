@@ -154,13 +154,21 @@ bool attemptWiFiSync() {
 
     Serial.printf("Found unsynced ride: %s. Uploading...\n", filename.c_str());
     
+    // Safety guard: If the file is completely empty, delete it and skip upload
+    if (entry.size() == 0) {
+      Serial.printf("File %s is empty (0 bytes). Skipping upload and deleting.\n", filename.c_str());
+      entry.close();
+      SD.remove(path.c_str());
+      continue;
+    }
+    
     HTTPClient http;
     http.begin(SERVER_URL);
     http.addHeader("Content-Type", "text/csv");
     http.addHeader("X-Ride-Filename", filename);
 
-    // Read file content and stream it in the HTTP POST request body
-    int httpCode = http.sendRequest("POST", &entry);
+    // Read file content and stream it in the HTTP POST request body (pass size to avoid chunked encoding hang)
+    int httpCode = http.sendRequest("POST", &entry, entry.size());
 
     if (httpCode == 200 || httpCode == 201) {
       Serial.printf("✨ Upload success for %s! Server response: %s\n", filename.c_str(), http.getString().c_str());

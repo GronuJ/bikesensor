@@ -149,9 +149,15 @@ async def upload_offline(
     try:
         body = await request.body()
         csv_content = body.decode("utf-8")
-        
+
+        # Check if the file is empty or only contains the CSV header
+        lines = [line.strip() for line in csv_content.split("\n") if line.strip()]
+        if len(lines) <= 1:
+            print(f"Received empty or header-only offline file: {x_ride_filename}. Ignoring and returning success.")
+            return {"status": "ignored", "message": "File contains no data rows."}
+
         # Check the headers of the CSV to auto-detect the mode
-        first_line = csv_content.split("\n", 1)[0].strip()
+        first_line = lines[0]
         headers = [h.strip() for h in first_line.split(",")]
         
         if "lat" in headers and "lon" in headers:
@@ -166,8 +172,16 @@ async def upload_offline(
             csv_path.write_text(csv_content, encoding="utf-8")
             
             # Call process_unified_offline to interpolate and run STFT analytics
-            from src.merge import process_unified_offline
-            paths = process_unified_offline(csv_path, ride_dir)
+            try:
+                from src.merge import process_unified_offline
+                paths = process_unified_offline(csv_path, ride_dir)
+            except ValueError as ve:
+                print(f"Ignoring invalid unified offline file {x_ride_filename}: {ve}")
+                if csv_path.exists():
+                    csv_path.unlink()
+                if ride_dir.exists() and not any(ride_dir.iterdir()):
+                    ride_dir.rmdir()
+                return {"status": "ignored", "message": str(ve)}
             
             # Extract statistics from the merged track dataset
             track_df = pd.read_csv(paths["track"])

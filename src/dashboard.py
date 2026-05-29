@@ -28,7 +28,7 @@ from scipy.signal import detrend, get_window, butter, filtfilt
 from streamlit_folium import st_folium
 
 from src.merge import build as merge_build
-from src.db import get_all_rides, DB_PATH, add_ride, init_db
+from src.db import get_all_rides, DB_PATH, add_ride, init_db, clear_db
 
 # Initialize DB on start
 init_db()
@@ -146,68 +146,33 @@ if len(rides) == 0:
             generate_mock_ride(datetime.datetime.now(), "kiel_uni")
             st.rerun()
 
-# --- Sidebar: Pending Offline Wi-Fi Syncs ---
-pending_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / "pending_vibrations"
-pending_files = list(pending_dir.glob("*.csv")) if pending_dir.exists() else []
-
-if pending_files:
-    with st.sidebar.expander(f"📥 Pending Offline Rides ({len(pending_files)})", expanded=True):
-        st.markdown("Your ESP32 automatically synced these vibration logs over Wi-Fi. Upload your GPS GPX track to merge them!")
-        
-        selected_pending_file = st.selectbox(
-            "Select Vibration Log",
-            options=pending_files,
-            format_func=lambda x: f"📟 {x.name} ({x.stat().st_size/1024:.1f} KB)"
-        )
-        
-        uploaded_gpx = st.file_uploader("Upload GPX Track", type=["gpx"], key="pending_gpx")
-        
-        if st.button("Merge Offline Ride") and uploaded_gpx and selected_pending_file:
-            with st.spinner("Merging GPX and vibration files..."):
-                try:
-                    # 1. Create a unique ride ID directory
-                    timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-                    ride_id = f"ride_offline_{timestamp_str}"
-                    ride_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / ride_id
-                    ride_dir.mkdir(parents=True, exist_ok=True)
+# --- Sidebar: Reset & Cleanup Manager ---
+if len(rides) > 0:
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🗑️ Clear All Rides", help="Permanently delete all ride files and records from the database.", use_container_width=True):
+        with st.spinner("Clearing all rides..."):
+            try:
+                # 1. Clear database
+                clear_db()
+                
+                # 2. Delete all ride directories under data/rides/
+                rides_dir = Path(__file__).resolve().parent.parent / "data" / "rides"
+                if rides_dir.exists():
+                    for item in rides_dir.iterdir():
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        elif item.is_file() and item.name != ".gitkeep":
+                            item.unlink()
+                            
+                # 3. Delete any files in pending_vibrations if any exist
+                pending_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / "pending_vibrations"
+                if pending_dir.exists():
+                    shutil.rmtree(pending_dir)
                     
-                    # 2. Save GPX and copy the offline vibration CSV into the directory
-                    gpx_path = ride_dir / "raw_gps.gpx"
-                    gpx_path.write_bytes(uploaded_gpx.getvalue())
-                    
-                    csv_path = ride_dir / "raw_imu.csv"
-                    shutil.copy(selected_pending_file, csv_path)
-                    
-                    # 3. Call our merge_offline helper to align and process them!
-                    from src.merge import merge_offline
-                    paths = merge_offline(gpx_path, csv_path, ride_dir)
-                    
-                    # 4. Compute statistics
-                    track_df = pd.read_csv(paths["track"])
-                    track_df["timestamp"] = pd.to_datetime(track_df["timestamp"])
-                    start_time = track_df["timestamp"].min().isoformat()
-                    end_time = track_df["timestamp"].max().isoformat()
-                    duration_s = (track_df["timestamp"].max() - track_df["timestamp"].min()).total_seconds()
-                    distance_m = float(track_df["cum_dist_m"].max())
-                    avg_speed_kmh = float(track_df["speed_kmh"].mean())
-                    
-                    # 5. Insert metadata into SQLite
-                    add_ride(
-                        start_time=start_time,
-                        end_time=end_time,
-                        distance_m=distance_m,
-                        duration_s=duration_s,
-                        avg_speed_kmh=avg_speed_kmh,
-                        file_path=str(ride_dir)
-                    )
-                    
-                    # 6. Delete the pending file since it's fully synced!
-                    selected_pending_file.unlink()
-                    
-                    st.success("Ride merged and synced successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error merging files: {e}")
+                st.success("Database cleared successfully!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error resetting database: {e}")
 
 # Select ride dropdown
 ride_options = ["🌍 All Rides Combined"] + [
@@ -217,11 +182,21 @@ ride_options = ["🌍 All Rides Combined"] + [
 selected_ride_idx = st.sidebar.selectbox("Select Ride to Analyze", range(len(ride_options)), index=0)
 
 # Settings for map
-metric = st.sidebar.selectbox(
+metric_options = {
+    "📉 Road Roughness (Overall Vibration - RMS)": "rms_g",
+    "💥 Peak Impact Intensity (Max Pothole/Crack Shock)": "max_bump_g",
+    "〰️ Sway & Large Dips (Low Frequency 1-10 Hz)": "band_low_g",
+    "🧱 Cobblestone & Gravel (Mid Frequency 10-30 Hz)": "band_mid_g",
+    "🔊 Asphalt Micro-Texture (High Frequency 30-50 Hz)": "band_high_g",
+    "⚡ Riding Speed (km/h)": "speed_kmh"
+}
+
+selected_metric_name = st.sidebar.selectbox(
     "Vibration Heatmap Metric",
-    ["max_bump_g", "band_mid_g", "band_low_g", "band_high_g", "rms_g", "speed_kmh"],
+    options=list(metric_options.keys()),
     index=0,
 )
+metric = metric_options[selected_metric_name]
 radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 12)
 
 # Curb configuration
@@ -232,7 +207,7 @@ max_curb_speed = st.sidebar.slider("Max Speed for Curb (km/h)", 5, 25, 12, help=
 
 # Load Data based on selection
 if len(rides) == 0:
-    st.info("Please use the sidebar to load mock data or upload a ride.")
+    st.info("💡 **No rides found in your database yet!**\n\nPower on your ESP32 mapping box within range of your home Wi-Fi and it will automatically sync your rides. Alternatively, click **'✨ Load Mock Rides'** in the left sidebar to populate the dashboard with realistic test data!")
     st.stop()
 
 @st.cache_data
@@ -336,10 +311,12 @@ with tab_map:
         # Clickable Route Markers for Local Context (strided to avoid lag)
         stride = max(1, len(windows) // 300)
         for _, row in windows.iloc[::stride].iterrows():
+            unit = "km/h" if metric == "speed_kmh" else "g"
+            val_fmt = f"{row[metric]:.1f}" if metric == "speed_kmh" else f"{row[metric]:.2f}"
             folium.CircleMarker(
                 location=(row["lat"], row["lon"]), radius=3,
                 color=None, fill=True, fill_opacity=0.0,
-                tooltip=f"Time: {row['timestamp'].strftime('%H:%M:%S')}<br>{metric}: {row[metric]:.2f} g",
+                tooltip=f"Time: {row['timestamp'].strftime('%H:%M:%S')}<br><b>{selected_metric_name}</b>: {val_fmt} {unit}",
             ).add_to(m)
             
         # --- Curb Detection Implementation ---
@@ -377,9 +354,11 @@ with tab_map:
             sel = windows.loc[windows[metric].idxmax()]
             st.markdown(f"🔥 **Point of Maximum Vibration (Default):**")
             
+        unit = "km/h" if metric == "speed_kmh" else "g"
+        val_fmt = f"{sel[metric]:.1f}" if metric == "speed_kmh" else f"{sel[metric]:.2f}"
         st.markdown(f"""
         * **Timestamp:** {sel['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}
-        * **{metric.replace('_', ' ').capitalize()}:** {sel[metric]:.2f} g
+        * **{selected_metric_name}:** {val_fmt} {unit}
         * **Speed:** {sel['speed_kmh']:.1f} km/h
         * **Dominant Freq:** {sel.get('peak_hz', 0.0):.1f} Hz
         """)
