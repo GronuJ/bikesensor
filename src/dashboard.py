@@ -33,7 +33,7 @@ from src.db import get_all_rides, DB_PATH, add_ride, init_db, clear_db
 # Initialize DB on start
 init_db()
 
-st.set_page_config(page_title="Bikesensor IoT Dashboard", layout="wide", page_icon="🚴")
+st.set_page_config(page_title="Dashboard", layout="wide")
 
 # Modern Styling
 st.markdown("""
@@ -44,13 +44,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚴 Bikesensor IoT Dashboard")
+st.title("Dashboard")
 st.markdown("Analyze road surface quality, explore bike vibration frequencies, and locate high curbs across your rides.")
 
 
 
 # --- Sidebar: Multi-Ride Loading ---
-st.sidebar.header("📂 Ride Data Manager")
+st.sidebar.header("Ride Data Manager")
 
 # Retrieve rides
 rides = get_all_rides()
@@ -58,7 +58,7 @@ rides = get_all_rides()
 # --- Sidebar: Reset & Cleanup Manager ---
 if len(rides) > 0:
     st.sidebar.markdown("---")
-    if st.sidebar.button("🗑️ Clear All Rides", help="Permanently delete all ride files and records from the database.", use_container_width=True):
+    if st.sidebar.button("Clear All Rides", help="Permanently delete all ride files and records from the database.", use_container_width=True):
         with st.spinner("Clearing all rides..."):
             try:
                 # 1. Clear database
@@ -84,12 +84,12 @@ if len(rides) > 0:
                 st.error(f"Error resetting database: {e}")
 
 # Select ride dropdown
-ride_options = ["🌍 All Rides Combined"]
+ride_options = ["All Rides Combined"]
 for i, r in enumerate(rides):
     # Convert UTC timestamp to Europe/Berlin timezone explicitly
     dt_local = pd.to_datetime(r['start_time'], format='mixed', utc=True).to_pydatetime().astimezone(ZoneInfo('Europe/Berlin'))
     dt_str = dt_local.strftime('%Y-%m-%d %H:%M')
-    label = f"📅 {dt_str} | {r['distance_m']/1000:.2f} km"
+    label = f"{dt_str} | {r['distance_m']/1000:.2f} km"
     if i == 0:
         label += " (Latest)"
     ride_options.append(label)
@@ -98,12 +98,12 @@ selected_ride_idx = st.sidebar.selectbox("Select Ride to Analyze", range(len(rid
 
 # Settings for map
 metric_options = {
-    "📉 Road Roughness (Overall Vibration - RMS)": "rms_g",
-    "💥 Peak Impact Intensity (Max Pothole/Crack Shock)": "max_bump_g",
-    "〰️ Sway & Large Dips (Low Frequency 1-10 Hz)": "band_low_g",
-    "🧱 Cobblestone & Gravel (Mid Frequency 10-30 Hz)": "band_mid_g",
-    "🔊 Asphalt Micro-Texture (High Frequency 30-50 Hz)": "band_high_g",
-    "⚡ Riding Speed (km/h)": "speed_kmh"
+    "Road Roughness (Overall Vibration - RMS)": "rms_g",
+    "Peak Impact Intensity (Max Pothole/Crack Shock)": "max_bump_g",
+    "Sway & Large Dips (Low Frequency 1-10 Hz)": "band_low_g",
+    "Cobblestone & Gravel (Mid Frequency 10-30 Hz)": "band_mid_g",
+    "Asphalt Micro-Texture (High Frequency 30-50 Hz)": "band_high_g",
+    "Riding Speed (km/h)": "speed_kmh"
 }
 
 selected_metric_name = st.sidebar.selectbox(
@@ -116,13 +116,13 @@ radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 12)
 
 # Curb configuration
 st.sidebar.markdown("---")
-st.sidebar.header("⚠️ Curb Detection Settings")
+st.sidebar.header("Curb Detection Settings")
 curb_threshold = st.sidebar.slider("Curb Shock Threshold (g)", 0.8, 3.0, 1.4, step=0.1, help="Sudden vertical/vector shock threshold to identify curbs.")
 max_curb_speed = st.sidebar.slider("Max Speed for Curb (km/h)", 5, 25, 12, help="To avoid mistaking fast bumps for curbs, set the speed threshold below which a shock is flagged.")
 
 # Load Data based on selection
 if len(rides) == 0:
-    st.info("💡 **No rides found in your database yet!**\n\nPower on your ESP32 mapping box within range of your home Wi-Fi and it will automatically sync your rides.")
+    st.info("**No rides found in your database yet!**\n\nPower on your ESP32 mapping box within range of your home Wi-Fi and it will automatically sync your rides.")
     st.stop()
 
 @st.cache_data
@@ -177,7 +177,7 @@ def load_all_rides_data(selected_idx: int, rides_list: list):
 windows, track, imu = load_all_rides_data(selected_ride_idx, rides)
 
 # --- KPIs (Key Performance Indicators) ---
-st.markdown("### 📊 Metrics")
+st.markdown("### Metrics")
 show_battery = "battery_pct" in windows.columns and not windows["battery_pct"].isna().all()
 
 if show_battery:
@@ -199,7 +199,7 @@ if show_battery:
     c5.metric("End Battery Level", f"{int(windows['battery_pct'].iloc[-1])}%")
 
 # --- Layout: Tabs ---
-tab_map, tab_analytics = st.tabs(["🗺️ Unified Heatmap & Curb Map", "📈 Ride Analytics"])
+tab_map, tab_analytics = st.tabs(["Unified Heatmap & Curb Map", "Ride Analytics"])
 
 with tab_map:
     map_col, plot_col = st.columns([1.6, 1], gap="large")
@@ -255,7 +255,7 @@ with tab_map:
             for idx, c_row in curbs.iterrows():
                 folium.Marker(
                     location=[c_row["lat"], c_row["lon"]],
-                    popup=f"⚠️ <b>High Curb / Severe Shock</b><br>Intensity: {c_row['max_bump_g']:.2f}g<br>Speed: {c_row['speed_kmh']:.1f} km/h<br>Time: {c_row['timestamp'].tz_convert('Europe/Berlin').strftime('%H:%M:%S')}",
+                    popup=f"<b>High Curb / Severe Shock</b><br>Intensity: {c_row['max_bump_g']:.2f}g<br>Speed: {c_row['speed_kmh']:.1f} km/h<br>Time: {c_row['timestamp'].tz_convert('Europe/Berlin').strftime('%H:%M:%S')}",
                     icon=folium.Icon(color="red", icon="exclamation-sign", prefix="glyphicon")
                 ).add_to(m)
         else:
@@ -272,10 +272,10 @@ with tab_map:
         if clicked:
             d = (windows["lat"] - clicked["lat"]) ** 2 + (windows["lon"] - clicked["lng"]) ** 2
             sel = windows.loc[d.idxmin()]
-            st.markdown(f"📍 **Selected Point (Clicked Map):**")
+            st.markdown(f"**Selected Point (Clicked Map):**")
         else:
             sel = windows.loc[windows[metric].idxmax()]
-            st.markdown(f"🔥 **Point of Maximum Vibration (Default):**")
+            st.markdown(f"**Point of Maximum Vibration (Default):**")
             
         unit = "km/h" if metric == "speed_kmh" else "g"
         val_fmt = f"{sel[metric]:.1f}" if metric == "speed_kmh" else f"{sel[metric]:.2f}"
@@ -338,13 +338,13 @@ with tab_map:
             st.info("Not enough raw IMU data around this location window to build frequency spectra.")
 
 with tab_analytics:
-    st.subheader("📈 Multi-Ride Vibration Spectrum & Comparison")
+    st.subheader("Multi-Ride Vibration Spectrum & Comparison")
     
     if selected_ride_idx != 0:
         # User toggle for X-Axis plotting (especially useful for stationary/table tests)
         plot_x_mode = st.radio(
             "Select X-Axis for Plots:",
-            options=["📏 Distance along Track (meters)", "⏱️ Elapsed Time (seconds)"],
+            options=["Distance along Track (meters)", "Elapsed Time (seconds)"],
             index=0,
             horizontal=True,
             help="For stationary/table tests, Elapsed Time is highly recommended since static GPS drift can falsely accumulate distance."
