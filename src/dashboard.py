@@ -239,7 +239,7 @@ with tab_map:
             folium.CircleMarker(
                 location=(row["lat"], row["lon"]), radius=3,
                 color=None, fill=True, fill_opacity=0.0,
-                tooltip=f"Time: {row['timestamp'].strftime('%H:%M:%S')}<br><b>{selected_metric_name}</b>: {val_fmt} {unit}",
+                tooltip=f"Time: {row['timestamp'].tz_convert('Europe/Berlin').strftime('%H:%M:%S')}<br><b>{selected_metric_name}</b>: {val_fmt} {unit}",
             ).add_to(m)
             
         # --- Curb Detection Implementation ---
@@ -255,7 +255,7 @@ with tab_map:
             for idx, c_row in curbs.iterrows():
                 folium.Marker(
                     location=[c_row["lat"], c_row["lon"]],
-                    popup=f"⚠️ <b>High Curb / Severe Shock</b><br>Intensity: {c_row['max_bump_g']:.2f}g<br>Speed: {c_row['speed_kmh']:.1f} km/h<br>Time: {c_row['timestamp'].strftime('%H:%M:%S')}",
+                    popup=f"⚠️ <b>High Curb / Severe Shock</b><br>Intensity: {c_row['max_bump_g']:.2f}g<br>Speed: {c_row['speed_kmh']:.1f} km/h<br>Time: {c_row['timestamp'].tz_convert('Europe/Berlin').strftime('%H:%M:%S')}",
                     icon=folium.Icon(color="red", icon="exclamation-sign", prefix="glyphicon")
                 ).add_to(m)
         else:
@@ -280,7 +280,7 @@ with tab_map:
         unit = "km/h" if metric == "speed_kmh" else "g"
         val_fmt = f"{sel[metric]:.1f}" if metric == "speed_kmh" else f"{sel[metric]:.2f}"
         st.markdown(f"""
-        * **Timestamp:** {sel['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}
+        * **Timestamp:** {sel['timestamp'].tz_convert('Europe/Berlin').strftime('%Y-%m-%d %H:%M:%S')}
         * **{selected_metric_name}:** {val_fmt} {unit}
         * **Speed:** {sel['speed_kmh']:.1f} km/h
         * **Dominant Freq:** {sel.get('peak_hz', 0.0):.1f} Hz
@@ -366,7 +366,7 @@ with tab_analytics:
             if not r_windows.empty:
                 summaries.append({
                     "Ride ID": f"Ride #{r['id']}",
-                    "Start Time": pd.to_datetime(r["start_time"], format='mixed', utc=True).strftime("%Y-%m-%d %H:%M"),
+                    "Start Time": pd.to_datetime(r["start_time"], format='mixed', utc=True).to_pydatetime().astimezone(ZoneInfo('Europe/Berlin')).strftime("%Y-%m-%d %H:%M"),
                     "Distance (km)": r["distance_m"] / 1000.0,
                     "Avg Speed (km/h)": r["avg_speed_kmh"],
                     "Avg Vibration (g)": r_windows["rms_g"].mean(),
