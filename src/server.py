@@ -134,35 +134,6 @@ async def upload_ride(payload: RideUploadPayload):
         print(f"Error processing ride: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process ride: {str(e)}")
 
-def send_mac_notification(ride_id: str, distance_m: float, duration_s: float):
-    """Sends a focus-respecting native macOS notification to the MacBook Josts-MacBook-Air.local over HTTP."""
-    try:
-        import urllib.request
-        import urllib.parse
-        
-        dist_km = distance_m / 1000.0
-        dur_min = duration_s / 60.0
-        msg = f"Ride synced successfully! Mapped {dist_km:.2f} km in {dur_min:.1f} minutes."
-        
-        # URL encode parameters
-        params = urllib.parse.urlencode({
-            'msg': msg,
-            'title': '🚴 Bikesensor Sync',
-            'sound': 'Glass'
-        })
-        url = f"http://Josts-MacBook-Air.local:8089/?{params}"
-        
-        # Send HTTP request (3-second timeout)
-        req = urllib.request.Request(url, method='GET')
-        with urllib.request.urlopen(req, timeout=3) as response:
-            if response.status == 200:
-                print("✅ [Background] Sent native focus-respecting notification via Mac Listener")
-            else:
-                print(f"[Background] Mac Listener returned status: {response.status}")
-                
-    except Exception as e:
-        print(f"[Background] Could not send macOS notification via HTTP: {e} (Is the Mac asleep or the listener stopped?)")
-
 def process_unified_offline_background(csv_path: Path, ride_dir: Path, ride_id: str, x_ride_filename: str):
     """Heavy vibration detrending, SciPy STFT, and SQLite DB insertion executed asynchronously."""
     try:
@@ -190,9 +161,6 @@ def process_unified_offline_background(csv_path: Path, ride_dir: Path, ride_id: 
             file_path=str(ride_dir)
         )
         print(f"✨ [Background] Auto-processed unified GPS ride: {ride_id} (DB ID: {db_id})")
-        
-        # Trigger native macOS notification
-        send_mac_notification(ride_id, distance_m, duration_s)
         
     except ValueError as ve:
         print(f"[Background] Ignoring invalid unified offline file {x_ride_filename}: {ve}")
