@@ -94,7 +94,7 @@ for i, r in enumerate(rides):
         label += " (Latest)"
     ride_options.append(label)
 
-selected_ride_idx = st.sidebar.selectbox("Select Ride to Analyze", range(len(ride_options)), index=0)
+selected_ride_idx = st.sidebar.selectbox("Select Ride to Analyze", range(len(ride_options)), format_func=lambda x: ride_options[x], index=0)
 
 # Settings for map
 metric_options = {
