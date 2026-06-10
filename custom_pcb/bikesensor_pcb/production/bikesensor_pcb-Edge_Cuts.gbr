@@ -1,0 +1,23 @@
+%TF.GenerationSoftware,KiCad,Pcbnew,10.0.3*%
+%TF.CreationDate,2026-06-02T11:28:32+02:00*%
+%TF.ProjectId,bikesensor_pcb,62696b65-7365-46e7-936f-725f7063622e,rev?*%
+%TF.SameCoordinates,Original*%
+%TF.FileFunction,Profile,NP*%
+%FSLAX46Y46*%
+G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
+G04 Created by KiCad (PCBNEW 10.0.3) date 2026-06-02 11:28:32*
+%MOMM*%
+%LPD*%
+G01*
+G04 APERTURE LIST*
+%TA.AperFunction,Profile*%
+%ADD10C,0.050000*%
+%TD*%
+G04 APERTURE END LIST*
+D10*
+X38100000Y-19930531D02*
+X110846403Y-19930531D01*
+X110846403Y-187363981D01*
+X38100000Y-187363981D01*
+X38100000Y-19930531D01*
+M02*

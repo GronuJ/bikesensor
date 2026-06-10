@@ -10,6 +10,16 @@ The backend automatically runs linear interpolation, Butterworth filtering, and 
 
 ---
 
+## 📸 Hardware Showcase
+
+Below is the completed physical system mounted on a custom 3D-printed handlebar enclosure and its 3D modeling design:
+
+| Physical System | 3D Printed Enclosure Design |
+| :---: | :---: |
+| ![Bikesensor Physical System](assets/system-photo.jpg) | ![3D Printed Enclosure STL](assets/enclosure-stl.png) |
+
+---
+
 ## 1. System Architecture
 
 ```mermaid
@@ -38,22 +48,34 @@ flowchart TD
 
 ---
 
-## 2. Hardware Wiring (ESP32-C3 SuperMini)
+## 2. Hardware Wiring & Custom PCB Carrier
 
-The hardware operates strictly on **3.3V logic**, but the GPS module's VCC is powered by the ESP32 **5V** pin to ensure the onboard 3.3V regulator boots the GPS chip reliably:
+The hardware operates on **3.3V logic** for standard communication and SD logging, driven by a Wemos D1 Mini TP5400 Battery Shield. 
 
-| Peripheral | Connection | ESP32-C3 SuperMini Pin | Notes |
+Here is the physical wiring diagram for our custom carrier board:
+
+![Bikesensor Electrical Wiring Diagram](assets/wiring-diagram.png)
+
+### Pin Map Table:
+
+| Peripheral | Connection | Pin | Notes |
 | :--- | :--- | :--- | :--- |
 | **MPU-6050 (I2C)** | SDA | **GPIO 6** | Shared I2C Bus |
 | | SCL | **GPIO 7** | Shared I2C Bus |
+| | VCC / GND | **3V3 / GND** | Powered by system 3.3V rail |
 | **MicroSD (SPI)** | CS | **GPIO 2** | Chip Select |
 | | MOSI | **GPIO 3** | SPI Master Out |
 | | SCK | **GPIO 4** | SPI Clock |
 | | MISO | **GPIO 5** | SPI Master In |
+| | VCC / GND | **3V3 / GND** | Powered by system 3.3V rail |
 | **NEO-6M (UART1)** | TX | **GPIO 10** | Connects to ESP32 RX |
 | | RX | **GPIO 1** | Connects to ESP32 TX |
-| | VCC | **5V Pin** | Stepped down to 3.3V on-board |
-| | GND | **GND** | Shared Ground reference |
+| | VCC / GND | **5V / GND** | Powered by 5V boost output |
+| **Wemos Battery Shield** | 5V Out | **J7 Pin 8** | Boosted 5.0V output |
+| | GND | **J7 Pin 7** | System Ground |
+| **SPDT Slide Switch (SW1)** | In / Out | **In Series** | Connected between `J7 Pin 8` (5V out) and `5V` net (ESP32 5V pin). Completely cuts off system power while preserving USB charging. |
+| **Voltage Divider (R1, R2, C3)** | Junction | **GPIO 0** | **R1 (100kΩ)** and **R2 (100kΩ)** divide raw battery voltage in half (`4.2V -> 2.1V`) for safe ADC reading. **C3 (100nF)** in parallel with R2 filters noise. |
+| **Decoupling Caps (C1, C2)** | Parallel | **3V3 / GND** | **C1 (10µF radial)** and **C2 (100nF ceramic)** placed in parallel next to the MicroSD socket prevent write-cycle voltage sags. |
 
 ---
 
@@ -118,3 +140,33 @@ Once the servers are running on your homeserver, they are accessible from any de
 * 🔌 **FastAPI Ingestion Endpoint:** `http://192.168.0.71:8000/api/upload-offline`
   * Accepts raw CSV POST requests directly from the ESP32 wireless logging box.
   * Automatically parses GPS/IMU fields, interpolates timestamps, runs STFT, and registers in `data/rides.db` (SQLite).
+
+---
+
+## 7. Device-to-Server Interfacing
+
+The communication between the hardware logging box and the backend server operates over a lightweight, wireless HTTP API.
+
+### 7.1 CSV Log Data Format
+When writing to the MicroSD card, the device registers data in a unified, comma-separated format:
+```csv
+millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time
+```
+*   `millis`: Relative milliseconds from ESP32 boot (used to align high-frequency vibration data).
+*   `ax,ay,az`: Raw vertical/lateral/longitudinal accelerometer values (scaled inside the DSP pipeline).
+*   `lat,lon,ele,speed_kmh`: GPS coordinate details.
+*   `battery_pct`: Divided battery measurement (`0 - 100%`) read from `GPIO 0`.
+*   `gps_time`: GPS UTC timestamp (used as a clock reference).
+
+### 7.2 Wireless Sync Protocol
+When the ESP32-C3 boots in Wi-Fi sync mode upon returning home, it scans the local storage, reads the log files, and performs an HTTP POST request:
+
+*   **HTTP Method:** `POST`
+*   **Request URL:** `http://192.168.0.71:8000/api/upload-offline`
+*   **Request Header:** `X-Ride-Filename: <filename>` (e.g., `ride_001.csv`)
+*   **Request Body:** Raw CSV file text content (UTF-8 encoded).
+
+### 7.3 Ingestion Processing Modes
+When the FastAPI server receives the upload:
+1.  **Unified Mode (Fully Automated):** If the CSV headers contain `lat` and `lon` fields, the server immediately triggers the DSP pipeline in a background thread. It runs GPS linear interpolation, Butterworth filtering, and STFT, saves the processed segments to the SQLite database (`data/rides.db`), and fires a macOS notification.
+2.  **Pending Mode (Manual GPX Merge):** If GPS coordinate fields are missing or incomplete in the raw log, the server stores the CSV in `data/pending/`. A prompt appears in the Streamlit dashboard sidebar, letting you upload a standard GPX file exported from any standard phone app. The dashboard builds a relative-millisecond clock model, aligns and merges the datasets, runs the analysis, and updates the database.

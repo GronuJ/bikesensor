@@ -31,3 +31,8 @@ firmware/bikesensor/private_credentials.h
 
 # Local execution logs
 *.log
+
+# Local History & Backups
+.history/
+*.lck
+*.bak
