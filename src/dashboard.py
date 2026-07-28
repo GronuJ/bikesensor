@@ -29,6 +29,7 @@ from streamlit_folium import st_folium
 
 from src.merge import build as merge_build
 from src.db import get_all_rides, DB_PATH, add_ride, init_db, clear_db
+from src.analysis import detect_curb_events
 
 # Initialize DB on start
 init_db()
@@ -102,7 +103,7 @@ metric_options = {
     "Peak Impact Intensity (Max Pothole/Crack Shock)": "max_bump_g",
     "Sway & Large Dips (Low Frequency 1-10 Hz)": "band_low_g",
     "Cobblestone & Gravel (Mid Frequency 10-30 Hz)": "band_mid_g",
-    "Asphalt Micro-Texture (High Frequency 30-50 Hz)": "band_high_g",
+    "Asphalt Micro-Texture (High Frequency 30-120 Hz)": "band_high_g",
     "Riding Speed (km/h)": "speed_kmh"
 }
 
@@ -118,7 +119,11 @@ radius = st.sidebar.slider("Heatmap radius (px)", 4, 30, 12)
 st.sidebar.markdown("---")
 st.sidebar.header("Curb Detection Settings")
 curb_threshold = st.sidebar.slider("Curb Shock Threshold (g)", 0.8, 3.0, 1.4, step=0.1, help="Sudden vertical/vector shock threshold to identify curbs.")
+min_curb_speed = st.sidebar.slider("Min Speed for Curb (km/h)", 0.0, 15.0, 1.0, step=0.5, help="Ignore events while almost stationary to reduce false positives.")
 max_curb_speed = st.sidebar.slider("Max Speed for Curb (km/h)", 5, 25, 12, help="To avoid mistaking fast bumps for curbs, set the speed threshold below which a shock is flagged.")
+curb_min_prominence = st.sidebar.slider("Min Peak Prominence (g)", 0.05, 1.0, 0.2, step=0.05, help="Higher values reduce repeated rough-road false positives.")
+curb_refractory_s = st.sidebar.slider("Event Merge Window (seconds)", 0.2, 3.0, 1.0, step=0.1, help="Merge nearby windows in time into one curb event.")
+curb_refractory_m = st.sidebar.slider("Event Merge Distance (m)", 1.0, 15.0, 4.0, step=0.5, help="Merge nearby windows in distance into one curb event.")
 
 # Load Data based on selection
 if len(rides) == 0:
@@ -128,6 +133,7 @@ if len(rides) == 0:
 @st.cache_data
 def load_all_rides_data(selected_idx: int, rides_list: list):
     """Loads and aggregates data frames based on multi or single ride selection."""
+    load_warnings = []
     if selected_idx == 0:
         # Load all rides
         windows_df_list = []
@@ -136,45 +142,70 @@ def load_all_rides_data(selected_idx: int, rides_list: list):
         
         for r in rides_list:
             r_path = Path(r["file_path"])
-            if (r_path / "windows.csv").exists():
-                win = pd.read_csv(r_path / "windows.csv")
+            ride_name = f"Ride #{r['id']}"
+            windows_path = r_path / "windows.csv"
+            track_path = r_path / "track.csv"
+            imu_path = r_path / "imu.csv"
+            if not (windows_path.exists() and track_path.exists() and imu_path.exists()):
+                load_warnings.append(f"{ride_name}: missing one or more data files.")
+                continue
+            try:
+                win = pd.read_csv(windows_path)
+                trk = pd.read_csv(track_path)
+                imu = pd.read_csv(imu_path)
                 win["timestamp"] = pd.to_datetime(win["timestamp"], format="mixed", utc=True)
-                win["ride_id"] = r["id"]
-                windows_df_list.append(win)
-            if (r_path / "track.csv").exists():
-                trk = pd.read_csv(r_path / "track.csv")
                 trk["timestamp"] = pd.to_datetime(trk["timestamp"], format="mixed", utc=True)
-                trk["ride_id"] = r["id"]
-                track_df_list.append(trk)
-            if (r_path / "imu.csv").exists():
-                imu = pd.read_csv(r_path / "imu.csv")
                 imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
+                win["ride_id"] = r["id"]
+                trk["ride_id"] = r["id"]
                 imu["ride_id"] = r["id"]
+                windows_df_list.append(win)
+                track_df_list.append(trk)
                 imu_df_list.append(imu)
-                
+            except Exception as e:
+                load_warnings.append(f"{ride_name}: failed to load data ({e}).")
+
+        if not windows_df_list or not track_df_list or not imu_df_list:
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), load_warnings
+
         return (
             pd.concat(windows_df_list).sort_values("timestamp").reset_index(drop=True),
             pd.concat(track_df_list).sort_values("timestamp").reset_index(drop=True),
-            pd.concat(imu_df_list).sort_values("timestamp").reset_index(drop=True)
+            pd.concat(imu_df_list).sort_values("timestamp").reset_index(drop=True),
+            load_warnings,
         )
     else:
         # Load single ride
         r = rides_list[selected_idx - 1]
         r_path = Path(r["file_path"])
-        win = pd.read_csv(r_path / "windows.csv")
-        trk = pd.read_csv(r_path / "track.csv")
-        imu = pd.read_csv(r_path / "imu.csv")
-        
-        win["timestamp"] = pd.to_datetime(win["timestamp"], format="mixed", utc=True)
-        trk["timestamp"] = pd.to_datetime(trk["timestamp"], format="mixed", utc=True)
-        imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
-        
-        win["ride_id"] = r["id"]
-        trk["ride_id"] = r["id"]
-        imu["ride_id"] = r["id"]
-        return win, trk, imu
+        ride_name = f"Ride #{r['id']}"
+        windows_path = r_path / "windows.csv"
+        track_path = r_path / "track.csv"
+        imu_path = r_path / "imu.csv"
+        if not (windows_path.exists() and track_path.exists() and imu_path.exists()):
+            load_warnings.append(f"{ride_name}: missing one or more data files.")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), load_warnings
+        try:
+            win = pd.read_csv(windows_path)
+            trk = pd.read_csv(track_path)
+            imu = pd.read_csv(imu_path)
+            win["timestamp"] = pd.to_datetime(win["timestamp"], format="mixed", utc=True)
+            trk["timestamp"] = pd.to_datetime(trk["timestamp"], format="mixed", utc=True)
+            imu["timestamp"] = pd.to_datetime(imu["timestamp"], format="mixed", utc=True)
+            win["ride_id"] = r["id"]
+            trk["ride_id"] = r["id"]
+            imu["ride_id"] = r["id"]
+            return win, trk, imu, load_warnings
+        except Exception as e:
+            load_warnings.append(f"{ride_name}: failed to load data ({e}).")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), load_warnings
 
-windows, track, imu = load_all_rides_data(selected_ride_idx, rides)
+windows, track, imu, load_warnings = load_all_rides_data(selected_ride_idx, rides)
+if load_warnings:
+    st.sidebar.warning(f"Skipped {len(load_warnings)} ride(s) with invalid data.")
+if windows.empty or track.empty or imu.empty:
+    st.warning("No valid ride datasets are available for analysis. Please reprocess or resync rides with missing/corrupt files.")
+    st.stop()
 
 # --- KPIs (Key Performance Indicators) ---
 st.markdown("### Metrics")
@@ -246,17 +277,24 @@ with tab_map:
                 tooltip=f"Time: {row['timestamp'].tz_convert('Europe/Berlin').strftime('%H:%M:%S')}<br><b>{selected_metric_name}</b>: {val_fmt} {unit}",
             ).add_to(m)
             
-        # --- Curb Detection Implementation ---
-        # A curb is characterized by:
-        # 1. max_bump_g exceeds curb_threshold
-        # 2. vehicle speed is low (speed_kmh <= max_curb_speed)
-        curbs = windows[(windows["max_bump_g"] >= curb_threshold) & (windows["speed_kmh"] <= max_curb_speed)]
-        
-        # To avoid putting a marker on contiguous windows for the same curb, we group close coordinates
-        if not curbs.empty:
-            st.sidebar.success(f"Detected {len(curbs)} High Curbs / Bumps!")
-            
-            for idx, c_row in curbs.iterrows():
+        if min_curb_speed > float(max_curb_speed):
+            st.sidebar.error("Min curb speed must be <= max curb speed.")
+            curb_events = windows.iloc[0:0].copy()
+        else:
+            curb_events = detect_curb_events(
+                windows,
+                threshold_g=curb_threshold,
+                min_speed_kmh=min_curb_speed,
+                max_speed_kmh=float(max_curb_speed),
+                min_prominence_g=curb_min_prominence,
+                refractory_s=curb_refractory_s,
+                refractory_m=curb_refractory_m,
+            )
+
+        if not curb_events.empty:
+            st.sidebar.success(f"Detected {len(curb_events)} High Curbs / Bumps!")
+
+            for _, c_row in curb_events.iterrows():
                 folium.Marker(
                     location=[c_row["lat"], c_row["lon"]],
                     popup=f"<b>High Curb / Severe Shock</b><br>Intensity: {c_row['max_bump_g']:.2f}g<br>Speed: {c_row['speed_kmh']:.1f} km/h<br>Time: {c_row['timestamp'].tz_convert('Europe/Berlin').strftime('%H:%M:%S')}",

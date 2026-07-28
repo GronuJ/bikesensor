@@ -120,3 +120,75 @@ def stft_features(imu: pd.DataFrame) -> pd.DataFrame:
     out["hop_n"] = cfg.hop_n
     out["fs_hz"] = cfg.fs
     return out.drop(columns="t_center_ns")
+
+
+def detect_curb_events(
+    windows: pd.DataFrame,
+    *,
+    threshold_g: float,
+    min_speed_kmh: float = 1.0,
+    max_speed_kmh: float = 12.0,
+    min_prominence_g: float = 0.2,
+    refractory_s: float = 1.0,
+    refractory_m: float = 4.0,
+) -> pd.DataFrame:
+    """
+    Detect curb-like events from window metrics.
+
+    This upgrades simple thresholding to event detection using:
+    1. threshold + speed gate,
+    2. local-maximum filtering,
+    3. prominence over a rolling baseline,
+    4. refractory suppression in time and distance.
+    """
+    if windows.empty:
+        return windows.iloc[0:0].copy()
+
+    required = {"timestamp", "max_bump_g", "speed_kmh", "cum_dist_m", "lat", "lon"}
+    missing = required - set(windows.columns)
+    if missing:
+        raise ValueError(f"Missing required columns for curb detection: {sorted(missing)}")
+
+    w = windows.copy().sort_values("timestamp").reset_index(drop=True)
+    w["timestamp"] = pd.to_datetime(w["timestamp"], utc=True, format="mixed")
+
+    baseline = w["max_bump_g"].rolling(window=11, center=True, min_periods=1).median()
+    prominence = w["max_bump_g"] - baseline
+    prev_bump = w["max_bump_g"].shift(1, fill_value=-np.inf)
+    next_bump = w["max_bump_g"].shift(-1, fill_value=-np.inf)
+    is_local_max = (w["max_bump_g"] >= prev_bump) & (w["max_bump_g"] >= next_bump)
+
+    gps_valid = (
+        w["lat"].notna()
+        & w["lon"].notna()
+        & w["speed_kmh"].notna()
+        & w["cum_dist_m"].notna()
+    )
+    candidates = w.loc[
+        gps_valid
+        & (w["max_bump_g"] >= threshold_g)
+        & (w["speed_kmh"] >= min_speed_kmh)
+        & (w["speed_kmh"] <= max_speed_kmh)
+        & (prominence >= min_prominence_g)
+        & is_local_max
+    ].copy()
+    if candidates.empty:
+        return candidates
+
+    selected: list[int] = []
+    for idx in candidates.sort_values("max_bump_g", ascending=False).index:
+        row = w.loc[idx]
+        keep = True
+        for kept_idx in selected:
+            kept = w.loc[kept_idx]
+            dt = abs((row["timestamp"] - kept["timestamp"]).total_seconds())
+            dd = abs(float(row["cum_dist_m"]) - float(kept["cum_dist_m"]))
+            if dt <= refractory_s and dd <= refractory_m:
+                keep = False
+                break
+        if keep:
+            selected.append(idx)
+
+    events = w.loc[selected].sort_values("timestamp").reset_index(drop=True)
+    events["event_id"] = np.arange(1, len(events) + 1)
+    return events
