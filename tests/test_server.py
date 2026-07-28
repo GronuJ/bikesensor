@@ -170,4 +170,21 @@ def test_upload_offline_unified():
     conn.close()
 
 
+def test_upload_offline_rejects_path_traversal_filename():
+    csv_data = "millis,ax,ay,az\n100,0,0,8192"
+    headers = {
+        "X-Ride-Filename": "../ride_test.csv",
+        "Content-Type": "text/csv"
+    }
 
+    response = client.post("/api/upload-offline", content=csv_data, headers=headers)
+    assert response.status_code == 400
+    assert "path separators" in response.json()["detail"]
+
+
+def test_health_endpoint():
+    response = client.get("/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["database"] == "ok"

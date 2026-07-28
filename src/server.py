@@ -3,13 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from pathlib import Path
+import os
+import re
 import json
 import pandas as pd
 import datetime
 import uvicorn
 
 # Import database and merge functionality
-from src.db import init_db, add_ride, get_all_rides
+from src.db import init_db, add_ride, get_all_rides, get_db_connection
 from src.merge import build
 
 from contextlib import asynccontextmanager
@@ -34,6 +36,7 @@ app.add_middleware(
 # Define directories
 RIDES_DIR = Path(__file__).resolve().parent.parent / "data" / "rides"
 RIDES_DIR.mkdir(exist_ok=True, parents=True)
+SAFE_RIDE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.csv$")
 
 # Pydantic Schemas for validation
 class BLEPacket(BaseModel):
@@ -43,6 +46,20 @@ class BLEPacket(BaseModel):
 class RideUploadPayload(BaseModel):
     gpx_data: str
     ble_data: List[BLEPacket]
+
+
+def _validated_ride_filename(raw_filename: str) -> str:
+    filename = raw_filename.strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="X-Ride-Filename must not be empty.")
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="X-Ride-Filename must not include path separators.")
+    if not SAFE_RIDE_FILENAME_PATTERN.fullmatch(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="X-Ride-Filename must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.csv$",
+        )
+    return filename
 
 @app.post("/api/upload")
 async def upload_ride(payload: RideUploadPayload):
@@ -190,13 +207,14 @@ async def upload_offline(
     2. Otherwise, we save it to the pending directory to be merged with a GPX track later.
     """
     try:
+        safe_filename = _validated_ride_filename(x_ride_filename)
         body = await request.body()
         csv_content = body.decode("utf-8")
 
         # Check if the file is empty or only contains the CSV header
         lines = [line.strip() for line in csv_content.split("\n") if line.strip()]
         if len(lines) <= 1:
-            print(f"Received empty or header-only offline file: {x_ride_filename}. Ignoring and returning success.")
+            print(f"Received empty or header-only offline file: {safe_filename}. Ignoring and returning success.")
             return {"status": "ignored", "message": "File contains no data rows."}
 
         # Check the headers of the CSV to auto-detect the mode
@@ -214,19 +232,16 @@ async def upload_offline(
             csv_path = ride_dir / "raw_imu.csv"
             csv_path.write_text(csv_content, encoding="utf-8")
             
-            # Queue the heavy STFT, filtering, and database operations in an immediate asyncio task
-            import asyncio
-            asyncio.create_task(
-                asyncio.to_thread(
-                    process_unified_offline_background,
-                    csv_path,
-                    ride_dir,
-                    ride_id,
-                    x_ride_filename
-                )
+            # Queue heavy STFT/filtering/DB processing in FastAPI background task machinery.
+            background_tasks.add_task(
+                process_unified_offline_background,
+                csv_path,
+                ride_dir,
+                ride_id,
+                safe_filename,
             )
-            
-            print(f"Successfully received and queued unified offline file: {x_ride_filename} (processing in background)")
+
+            print(f"Successfully received and queued unified offline file: {safe_filename} (processing in background)")
             return {
                 "status": "success",
                 "message": f"Ride {ride_id} received successfully. Processing is running in the background.",
@@ -237,12 +252,14 @@ async def upload_offline(
             pending_dir = Path(__file__).resolve().parent.parent / "data" / "rides" / "pending_vibrations"
             pending_dir.mkdir(exist_ok=True, parents=True)
             
-            save_path = pending_dir / x_ride_filename
+            save_path = pending_dir / safe_filename
             save_path.write_text(csv_content, encoding="utf-8")
             
-            print(f"Successfully received offline vibration file: {x_ride_filename} ({len(body)} bytes)")
-            return {"status": "success", "message": f"Saved {x_ride_filename} to pending vibrations."}
+            print(f"Successfully received offline vibration file: {safe_filename} ({len(body)} bytes)")
+            return {"status": "success", "message": f"Saved {safe_filename} to pending vibrations."}
             
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error receiving offline file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -256,5 +273,21 @@ async def list_rides():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/health")
+async def health():
+    """Simple health endpoint for service and DB liveness checks."""
+    try:
+        with get_db_connection() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return {"status": "ok", "service": "bikesensor-api", "database": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"database_unavailable: {e}")
+
 if __name__ == "__main__":
-    uvicorn.run("src.server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "src.server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=os.getenv("BIKESENSOR_DEV_RELOAD", "0") == "1",
+    )

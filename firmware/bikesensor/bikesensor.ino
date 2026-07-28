@@ -20,12 +20,24 @@
 #if __has_include("private_credentials.h")
 #include "private_credentials.h"
 #else
-static const char* WIFI_SSID = "YourHomeWiFi";       // Fallback SSID
-static const char* WIFI_PASS = "YourPassword";       // Fallback Password
+#define WIFI_SSID "YourHomeWiFi"        // Fallback SSID
+#define WIFI_PASS "YourPassword"        // Fallback password
+#define SERVER_HOST "bikesensor-server.local"
+#define SERVER_PORT 8000
+#define SERVER_UPLOAD_PATH "/api/upload-offline"
 #endif
 
-// Raspberry Pi 3 B+ Local Server Ingestion Endpoint
-static const char* SERVER_URL = "http://192.168.0.71:8000/api/upload-offline"; 
+#ifndef SERVER_HOST
+#define SERVER_HOST "bikesensor-server.local"
+#endif
+
+#ifndef SERVER_PORT
+#define SERVER_PORT 8000
+#endif
+
+#ifndef SERVER_UPLOAD_PATH
+#define SERVER_UPLOAD_PATH "/api/upload-offline"
+#endif
 
 // SPI Pins for MicroSD Card Reader
 static constexpr uint8_t PIN_SPI_SCK  = 4;
@@ -93,6 +105,10 @@ static void readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
   }
 }
 
+static String getServerUrl() {
+  return String("http://") + SERVER_HOST + ":" + String(SERVER_PORT) + SERVER_UPLOAD_PATH;
+}
+
 // ---------- WI-FI SYNC FUNCTION ----------
 bool attemptWiFiSync() {
   Serial.print("Connecting to Wi-Fi: ");
@@ -124,6 +140,8 @@ bool attemptWiFiSync() {
   Serial.println("\nConnected to home Wi-Fi!");
   digitalWrite(8, LOW); // Turn LED solid ON to indicate active connected/syncing mode!
   Serial.println("Checking SD card for offline rides to sync...");
+  const String serverUrl = getServerUrl();
+  Serial.printf("Using upload endpoint: %s\n", serverUrl.c_str());
 
   // Open the root directory of the SD card to search for pending ride files
   File root = SD.open("/");
@@ -170,7 +188,7 @@ bool attemptWiFiSync() {
     }
     
     HTTPClient http;
-    http.begin(SERVER_URL);
+    http.begin(serverUrl);
     http.setTimeout(65000); // 65-second read timeout (maximum safe uint16_t value) to safely transfer large ride logs
     http.addHeader("Content-Type", "text/csv");
     http.addHeader("X-Ride-Filename", filename);

@@ -89,6 +89,9 @@ To protect your home Wi-Fi passwords from being committed to Git, create a file 
 #pragma once
 #define WIFI_SSID "YourHomeSSID"
 #define WIFI_PASS "YourHomePassword"
+#define SERVER_HOST "bikesensor-server.local"  // preferred: mDNS host
+#define SERVER_PORT 8000
+#define SERVER_UPLOAD_PATH "/api/upload-offline"
 ```
 The firmware preprocessor will automatically detect and include this file during compile, keeping your passwords safe and isolated in your local workspace.
 
@@ -103,7 +106,14 @@ pio device monitor -b 115200     # Real-time console debugger
 
 ## 4. Raspberry Pi Server Deployment (Systemd)
 
-Both the ingestion server and the Streamlit dashboard run 24/7 in the background on your Raspberry Pi homeserver (`bikesensor-server.local`, IP: `192.168.0.71`), managed by Linux `systemd` to ensure they automatically start on boot and recover from power cutoffs.
+Both the ingestion server and the Streamlit dashboard run 24/7 in the background on your Raspberry Pi homeserver (`bikesensor-server.local`, current IP: `192.168.0.72`), managed by Linux `systemd` to ensure they automatically start on boot and recover from power cutoffs.
+
+### Production Start Commands (no autoreload)
+Use these in your `ExecStart` definitions (or equivalent shell scripts):
+```bash
+uv run uvicorn src.server:app --host 0.0.0.0 --port 8000
+uv run streamlit run src/dashboard.py --server.port 8501 --server.address 0.0.0.0
+```
 
 ### Systemd Control Commands:
 ```bash
@@ -134,12 +144,14 @@ To make ride syncing completely frictionless, the Pi homeserver is integrated wi
 
 Once the servers are running on your homeserver, they are accessible from any device on your local Wi-Fi:
 
-* 📊 **Interactive Web Dashboard:** [http://192.168.0.71:8501](http://192.168.0.71:8501)
+* 📊 **Interactive Web Dashboard:** [http://bikesensor-server.local:8501](http://bikesensor-server.local:8501)
   * Displays multi-ride GPS heatmaps of road surface roughness.
   * Details vertical curb-shock warnings, average ride statistics, and PSD frequency spectrum graphs.
-* 🔌 **FastAPI Ingestion Endpoint:** `http://192.168.0.71:8000/api/upload-offline`
+* 🔌 **FastAPI Ingestion Endpoint:** `http://bikesensor-server.local:8000/api/upload-offline`
   * Accepts raw CSV POST requests directly from the ESP32 wireless logging box.
   * Automatically parses GPS/IMU fields, interpolates timestamps, runs STFT, and registers in `data/rides.db` (SQLite).
+* ❤️ **API Health Endpoint:** `http://bikesensor-server.local:8000/health`
+  * Returns quick service/DB liveness status for monitoring.
 
 ---
 
@@ -162,7 +174,7 @@ millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time
 When the ESP32-C3 boots in Wi-Fi sync mode upon returning home, it scans the local storage, reads the log files, and performs an HTTP POST request:
 
 *   **HTTP Method:** `POST`
-*   **Request URL:** `http://192.168.0.71:8000/api/upload-offline`
+*   **Request URL:** `http://bikesensor-server.local:8000/api/upload-offline`
 *   **Request Header:** `X-Ride-Filename: <filename>` (e.g., `ride_001.csv`)
 *   **Request Body:** Raw CSV file text content (UTF-8 encoded).
 

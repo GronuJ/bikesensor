@@ -36,3 +36,7 @@ firmware/bikesensor/private_credentials.h
 .history/
 *.lck
 *.bak
+
+# KiCad local artifacts
+*.kicad_prl
+custom_pcb/**/drc_report.json
