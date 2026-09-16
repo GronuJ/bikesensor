@@ -5,7 +5,7 @@ from typing import List
 from pathlib import Path
 import os
 import re
-import json
+import hashlib
 import pandas as pd
 import datetime
 import uvicorn
@@ -179,19 +179,23 @@ def process_unified_offline_background(csv_path: Path, ride_dir: Path, ride_id: 
         )
         print(f"✨ [Background] Auto-processed unified GPS ride: {ride_id} (DB ID: {db_id})")
         
-    except ValueError as ve:
-        print(f"[Background] Ignoring invalid unified offline file {x_ride_filename}: {ve}")
-        if csv_path.exists():
-            csv_path.unlink()
-        if ride_dir.exists() and not any(ride_dir.iterdir()):
-            ride_dir.rmdir()
     except Exception as e:
-        print(f"[Background] Error processing offline file {x_ride_filename}: {e}")
-        # Clean up files if anything fails
-        if csv_path.exists():
-            csv_path.unlink()
-        if ride_dir.exists() and not any(ride_dir.iterdir()):
-            ride_dir.rmdir()
+        # NEVER delete the raw upload on a processing failure. The ESP32 wipes its SD
+        # card once the POST returns 2xx, so raw_imu.csv is the only copy of that ride
+        # and it costs a real bike trip to reproduce. Record the failure beside the data
+        # and leave the bytes alone so the ride can be reprocessed after a fix.
+        print(f"[Background] Failed to process {x_ride_filename}: {e}")
+        try:
+            (ride_dir / "PROCESSING_FAILED.txt").write_text(
+                f"{datetime.datetime.now(datetime.timezone.utc).isoformat()}\n"
+                f"filename: {x_ride_filename}\n"
+                f"error: {type(e).__name__}: {e}\n"
+                "\nRaw data preserved. Re-run src.merge.process_unified_offline on "
+                "raw_imu.csv once the cause is fixed.\n",
+                encoding="utf-8",
+            )
+        except Exception as write_err:
+            print(f"[Background] Could not write failure marker: {write_err}")
 
 @app.post("/api/upload-offline")
 async def upload_offline(
@@ -223,14 +227,29 @@ async def upload_offline(
         
         if "lat" in headers and "lon" in headers:
             # --- Method 2: Unified GPS Mode (Fully Automated!) ---
+            # The ride id carries a short content hash as well as the timestamp. Two reasons:
+            #  - the firmware uploads every pending file back-to-back with no delay, so a
+            #    second-resolution id alone collides and the second upload's raw_imu.csv
+            #    silently overwrites the first one's.
+            #  - if a response is lost in transit the device re-sends the same bytes; an
+            #    identical hash lets us recognise that and skip reprocessing instead of
+            #    creating a duplicate ride.
             timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-            ride_id = f"ride_auto_{timestamp_str}"
+            content_hash = hashlib.sha256(body).hexdigest()[:10]
+            ride_id = f"ride_auto_{timestamp_str}_{content_hash}"
             ride_dir = RIDES_DIR / ride_id
-            ride_dir.mkdir(exist_ok=True, parents=True)
-            
-            # Save the raw CSV directly as raw_imu.csv
             csv_path = ride_dir / "raw_imu.csv"
-            csv_path.write_text(csv_content, encoding="utf-8")
+
+            if csv_path.exists():
+                print(f"Duplicate upload of {safe_filename} (hash {content_hash}); already stored.")
+                return {
+                    "status": "duplicate",
+                    "message": "This ride was already received.",
+                    "ride_id": ride_id,
+                }
+
+            ride_dir.mkdir(exist_ok=True, parents=True)
+            csv_path.write_bytes(body)
             
             # Queue heavy STFT/filtering/DB processing in FastAPI background task machinery.
             background_tasks.add_task(
