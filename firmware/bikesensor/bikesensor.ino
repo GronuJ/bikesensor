@@ -12,7 +12,12 @@
 #include <SPI.h>
 #include <SD.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+
+// Mozilla root bundle shipped with the Arduino-ESP32 core. Pinning a leaf
+// certificate would break every 90 days when it rotates; the bundle does not.
+extern const uint8_t rootca_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 #include <TinyGPS++.h>
 #include <vector>
 
@@ -22,21 +27,26 @@
 #else
 #define WIFI_SSID "YourHomeWiFi"        // Fallback SSID
 #define WIFI_PASS "YourPassword"        // Fallback password
-#define SERVER_HOST "bikesensor-server.local"
-#define SERVER_PORT 8000
-#define SERVER_UPLOAD_PATH "/api/upload-offline"
+#define SERVER_HOST "kiel.earth"
+#define SERVER_PORT 443
+#define SERVER_UPLOAD_PATH "/api/bike/ingest"
+#define DEVICE_TOKEN "set_me_in_private_credentials_h"
 #endif
 
 #ifndef SERVER_HOST
-#define SERVER_HOST "bikesensor-server.local"
+#define SERVER_HOST "kiel.earth"
 #endif
 
 #ifndef SERVER_PORT
-#define SERVER_PORT 8000
+#define SERVER_PORT 443
 #endif
 
 #ifndef SERVER_UPLOAD_PATH
-#define SERVER_UPLOAD_PATH "/api/upload-offline"
+#define SERVER_UPLOAD_PATH "/api/bike/ingest"
+#endif
+
+#ifndef DEVICE_TOKEN
+#define DEVICE_TOKEN "set_me_in_private_credentials_h"
 #endif
 
 // SPI Pins for MicroSD Card Reader
@@ -56,7 +66,12 @@ static constexpr uint8_t MPU_ADDR = 0x68;
 static constexpr uint8_t PIN_BATTERY = 0;
 
 // Logging Parameters
-static constexpr uint16_t SAMPLE_RATE_HZ = 100; // 100 Hz vibration sampling is ideal for road surface PSD
+// 200 Hz, not 100. Cobblestone excites the frame at (speed / sett pitch): 10cm
+// setts at 15 km/h is 42 Hz, at 20 km/h 56 Hz. At 100 Hz sampling the Nyquist
+// limit is 50 Hz, so the most common German Kleinpflaster aliases away at normal
+// riding speed and no amount of processing recovers it. 200 Hz moves the limit
+// to 100 Hz and covers setts down to ~6 cm.
+static constexpr uint16_t SAMPLE_RATE_HZ = 200;
 static constexpr uint32_t SAMPLE_INTERVAL_MS = 1000 / SAMPLE_RATE_HZ;
 
 // State Variables
@@ -88,7 +103,10 @@ static void mpuInit() {
   Wire.begin(6, 7, 400000); // SDA=GPIO 6, SCL=GPIO 7
   w8(0x6B, 0x80); delay(100); // Reset MPU-6050
   w8(0x6B, 0x01);             // Clock source PLL with X gyro
-  w8(0x1A, 0x03);             // DLPF CONFIG: Accel BW = 44Hz (Ideal lowpass filter for 100Hz sampling)
+  w8(0x1A, 0x02);             // DLPF CONFIG: Accel BW = 94Hz — the anti-alias filter
+                              // must sit just under Nyquist (100Hz at 200Hz sampling).
+                              // Leaving this at 44Hz would throw away exactly the band
+                              // that cobblestone lives in.
   w8(0x1C, 0x08);             // ACCEL_CONFIG: Full scale range ±4 g
   Serial.println("MPU-6050 initialized.");
 }
@@ -106,7 +124,30 @@ static void readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
 }
 
 static String getServerUrl() {
-  return String("http://") + SERVER_HOST + ":" + String(SERVER_PORT) + SERVER_UPLOAD_PATH;
+  return String("https://") + SERVER_HOST + SERVER_UPLOAD_PATH;
+}
+
+// The ride id is the SD filename without its extension. Deriving it from the
+// satellite clock at file creation makes it globally unique and, crucially,
+// stable across reboots — so if an upload response is lost, the retry carries
+// the same id and the server recognises the replay instead of storing the ride
+// twice. Falls back to a hardware random when there is no fix yet.
+static void makeRideFilename(char *out, size_t n) {
+  if (gps.date.isValid() && gps.time.isValid() && gps.date.year() > 2020) {
+    snprintf(out, n, "/r%02d%02d%02d_%02d%02d%02d.csv",
+             gps.date.year() % 100, gps.date.month(), gps.date.day(),
+             gps.time.hour(), gps.time.minute(), gps.time.second());
+  } else {
+    snprintf(out, n, "/rboot_%08lx.csv", (unsigned long)esp_random());
+  }
+}
+
+static String rideIdFromFilename(const String &filename) {
+  String id = filename;
+  if (id.startsWith("/")) id = id.substring(1);
+  int dot = id.lastIndexOf('.');
+  if (dot > 0) id = id.substring(0, dot);
+  return id;
 }
 
 // ---------- WI-FI SYNC FUNCTION ----------
@@ -187,25 +228,38 @@ bool attemptWiFiSync() {
       continue;
     }
     
-    HTTPClient http;
-    http.begin(serverUrl);
-    http.setTimeout(65000); // 65-second read timeout (maximum safe uint16_t value) to safely transfer large ride logs
-    http.addHeader("Content-Type", "text/csv");
-    http.addHeader("X-Ride-Filename", filename);
+    // A fresh TLS client per file. WiFiClientSecure is documented to leak memory
+    // when certificate verification FAILS, so the retry path below must not spin
+    // on a broken handshake — one attempt per file per sync, then move on.
+    WiFiClientSecure client;
+    client.setCACertBundle(rootca_crt_bundle_start);
+    client.setTimeout(20);
 
-    // Read file content and stream it in the HTTP POST request body (pass size to avoid chunked encoding hang)
+    HTTPClient http;
+    http.begin(client, serverUrl);
+    http.setTimeout(65000); // large ride logs need a long read timeout
+    http.addHeader("Content-Type", "text/csv");
+    http.addHeader("Authorization", String("Bearer ") + DEVICE_TOKEN);
+    http.addHeader("X-Ride-Id", rideIdFromFilename(filename));
+
+    // Stream the file as the body; passing the size avoids chunked encoding,
+    // which the ESP32 HTTP client handles poorly for large payloads.
     int httpCode = http.sendRequest("POST", &entry, entry.size());
 
-    if (httpCode == 200 || httpCode == 201) {
-      Serial.printf("✨ Upload success for %s! Server response: %s\n", filename.c_str(), http.getString().c_str());
+    // Delete ONLY on an explicit 2xx. The server stores the raw bytes before it
+    // acknowledges, so a 2xx means the ride is durable somewhere other than this
+    // SD card. Anything else — timeout, TLS failure, 5xx — leaves the file in
+    // place for the next sync. Since the ride id is stable, a replay after a lost
+    // response is recognised as a duplicate rather than stored twice.
+    if (httpCode >= 200 && httpCode < 300) {
+      Serial.printf("✨ Uploaded %s: %s\n", filename.c_str(), http.getString().c_str());
       http.end();
       entry.close();
-      
-      // Remove the file on the SD card so we don't upload it again
       SD.remove(path.c_str());
       Serial.printf("Deleted synced file: %s\n", path.c_str());
     } else {
-      Serial.printf("Upload failed for %s. HTTP code: %d, Response: %s\n", filename.c_str(), httpCode, http.getString().c_str());
+      Serial.printf("Upload failed for %s (HTTP %d). Keeping the file for the next sync.\n",
+                    filename.c_str(), httpCode);
       http.end();
       entry.close();
     }
@@ -218,14 +272,18 @@ bool attemptWiFiSync() {
 
 // ---------- STANDALONE LOGGING ----------
 void startNewRideLogging() {
-  // Find a unique ride file name by incrementing indices
-  int rideIndex = 1;
-  while (true) {
-    snprintf(currentRideFilename, sizeof(currentRideFilename), "/ride_%03d.csv", rideIndex);
-    if (!SD.exists(currentRideFilename)) {
-      break; // Found a unique name!
-    }
-    rideIndex++;
+  // Names used to be /ride_001.csv, restarting from 1 on every boot — so a new
+  // ride could silently overwrite an older, not-yet-uploaded one, and two rides
+  // from different boots could share an id. Derived from the satellite clock now.
+  makeRideFilename(currentRideFilename, sizeof(currentRideFilename));
+  if (SD.exists(currentRideFilename)) {
+    // Same second as an existing file (only reachable on a fast reboot): salt it.
+    char salted[48];
+    snprintf(salted, sizeof(salted), "/%.*s_%04x.csv",
+             (int)(strlen(currentRideFilename) - 5), currentRideFilename + 1,
+             (unsigned)(esp_random() & 0xffff));
+    strncpy(currentRideFilename, salted, sizeof(currentRideFilename) - 1);
+    currentRideFilename[sizeof(currentRideFilename) - 1] = '\0';
   }
 
   Serial.printf("Creating new ride log file: %s\n", currentRideFilename);
@@ -306,7 +364,10 @@ void setup() {
 
   w8(0x6B, 0x80); delay(100); // Reset MPU-6050
   w8(0x6B, 0x01);             // Clock source PLL with X gyro
-  w8(0x1A, 0x03);             // DLPF CONFIG: Accel BW = 44Hz (Ideal lowpass filter for 100Hz sampling)
+  w8(0x1A, 0x02);             // DLPF CONFIG: Accel BW = 94Hz — the anti-alias filter
+                              // must sit just under Nyquist (100Hz at 200Hz sampling).
+                              // Leaving this at 44Hz would throw away exactly the band
+                              // that cobblestone lives in.
   w8(0x1C, 0x08);             // ACCEL_CONFIG: Full scale range ±4 g
   Serial.println("MPU-6050 initialized.");
 
@@ -358,8 +419,17 @@ void loop() {
   }
 
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
-    // Keep strict phase alignment, but reset base if we are lagging severely (>100ms)
-    if (now - lastSampleMs > 100) {
+    // Phase handling. The old version added one interval whenever it was behind,
+    // which meant that after an SD stall several loop iterations fired in quick
+    // succession — samples taken 1-2 ms apart but spaced as if they were regular.
+    // That silently violates the uniform-rate assumption the whole FFT pipeline
+    // rests on, and it is invisible in the data.
+    //
+    // Now: if more than one slot was missed, give up on catching up and resync
+    // the phase. That turns a stall into a clean gap in the millis column, which
+    // the DSP detects and splits the ride on, instead of into bunched samples it
+    // cannot detect at all.
+    if (now - lastSampleMs >= 2 * SAMPLE_INTERVAL_MS) {
       lastSampleMs = now;
     } else {
       lastSampleMs += SAMPLE_INTERVAL_MS;
