@@ -1,168 +1,102 @@
+// BIKESENSOR BOARD DIAGNOSTIC
+//
+// Finds peripherals instead of assuming the pin map, because this board has no
+// signal names on the silkscreen and no ESP32 pin names in the schematic — so
+// the mapping is exactly the thing most likely to be wrong on an assembly.
+//
+// KNOWN LIMITATION, learned the hard way: do NOT try to measure a pin's
+// resistance to ground by engaging the internal pull-up and then calling
+// analogReadMilliVolts(). On ESP32 the ADC driver reconfigures the pad and drops
+// the pull-up, so you measure the floating pin twice and get a meaningless
+// number. The digital pull-up/pull-down test below is the reliable one; treat
+// the ADC block purely as "is there a plausible battery voltage here".
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
-#include <TinyGPS++.h>
 
-// SPI Pins for MicroSD Card Reader
-static constexpr uint8_t PIN_SPI_SCK  = 4;
-static constexpr uint8_t PIN_SPI_MISO = 5;
-static constexpr uint8_t PIN_SPI_MOSI = 3;
-static constexpr uint8_t PIN_SPI_CS   = 2;
+static const uint8_t PINS[] = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 20, 21};
+static const int N = sizeof(PINS) / sizeof(PINS[0]);
 
-// UART Pins for NEO-6M GPS Module
-static constexpr uint8_t PIN_GPS_RX   = 10; // Connects to GPS TX
-static constexpr uint8_t PIN_GPS_TX   = 1;  // Connects to GPS RX
-static constexpr uint8_t MPU_ADDR = 0x68;
-static constexpr uint8_t PIN_BATTERY = 0;
-
-TinyGPSPlus gps;
-HardwareSerial GPSSerial(1);
-
-float getBatteryVoltage() {
-  float mv = analogReadMilliVolts(PIN_BATTERY) * 2.0; 
-  return mv / 1000.0;
-}
-
-uint8_t getBatteryPercent(float voltage) {
-  if (voltage >= 4.2) return 100;
-  if (voltage <= 3.3) return 0;
-  return (uint8_t)(((voltage - 3.3) / (4.2 - 3.3)) * 100.0); 
-}
-
-void mpuWrite(uint8_t reg, uint8_t v) {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg); Wire.write(v);
-  Wire.endTransmission();
-}
-
-bool mpuInit() {
-  Wire.begin(6, 7, 100000); // SDA=GPIO 6, SCL=GPIO 7
-  
-  // Test connection
-  Wire.beginTransmission(MPU_ADDR);
-  if (Wire.endTransmission() != 0) {
-    return false;
-  }
-  
-  mpuWrite(0x6B, 0x80); delay(100); // Reset
-  mpuWrite(0x6B, 0x01);             // Clock source PLL
-  mpuWrite(0x1A, 0x03);             // DLPF CONFIG
-  mpuWrite(0x1C, 0x08);             // ACCEL_CONFIG ±4 g
-  return true;
-}
-
-void readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-  Wire.requestFrom((int)MPU_ADDR, 6);
-  if (Wire.available() >= 6) {
-    ax = (Wire.read() << 8) | Wire.read();
-    ay = (Wire.read() << 8) | Wire.read();
-    az = (Wire.read() << 8) | Wire.read();
+// A pin pulled below V_IL while the ~45k internal pull-up is engaged is being
+// held by something stronger than roughly 14k. That is a real finding. It does
+// NOT distinguish a dead short from a few-k resistor — use a multimeter for that.
+static void pinStates() {
+  Serial.println("\n--- PIN STATES ---------------------------------------");
+  Serial.println("pull-up LOW  => held down by < ~14k (short, or a driver)");
+  Serial.println("pull-dn HIGH => pulled up by < ~14k (3V3, or a module pull-up)");
+  Serial.println("both follow  => floating, nothing attached\n");
+  for (int i = 0; i < N; i++) {
+    const uint8_t p = PINS[i];
+    pinMode(p, INPUT_PULLUP);   delay(5);
+    int up = 0; for (int k = 0; k < 9; k++) { up += digitalRead(p); delay(1); }
+    pinMode(p, INPUT_PULLDOWN); delay(5);
+    int dn = 0; for (int k = 0; k < 9; k++) { dn += digitalRead(p); delay(1); }
+    pinMode(p, INPUT);
+    const char *v;
+    if      (up >= 8 && dn <= 1) v = "floating";
+    else if (up <= 1 && dn <= 1) v = "HELD LOW   <<<";
+    else if (up >= 8 && dn >= 8) v = "PULLED HIGH";
+    else                         v = "loaded/noisy";
+    Serial.printf("  GPIO %-2u  up=%d/9 dn=%d/9  %s\n", p, up, dn, v);
   }
 }
 
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println("==========================================");
-  Serial.println("=== BIKESENSOR DIAGNOSTIC TOOL (WITH SD) ===");
-  Serial.println("==========================================");
-  
-  // 1. MPU-6050
-  if (mpuInit()) {
-    Serial.println("[SUCCESS] MPU-6050 found and initialized.");
-  } else {
-    Serial.println("[WARNING] MPU-6050 NOT found at 0x68. Check SDA (GPIO 6) and SCL (GPIO 7) wiring.");
-  }
-  
-  // 2. GPS
-  GPSSerial.begin(115200, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
-  Serial.println("[INFO] NEO-6M GPS serial interface started on UART1 (115200 baud).");
-  
-  // 3. MicroSD Card SPI test
-  Serial.println("[INFO] Initializing custom SPI for MicroSD Card...");
-  SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_CS);
-  if (SD.begin(PIN_SPI_CS)) {
-    Serial.println("[SUCCESS] MicroSD card mounted successfully.");
-    
-    // Try to open a file for writing
-    File testFile = SD.open("/test.txt", FILE_WRITE);
-    if (testFile) {
-      testFile.println("Bikesensor SD card SPI write/read test successful!");
-      testFile.close();
-      Serial.println("[SUCCESS] Wrote test file to SD card.");
-      
-      // Try to read it back
-      File readFile = SD.open("/test.txt", FILE_READ);
-      if (readFile) {
-        Serial.print("[SUCCESS] Read from SD card: ");
-        while (readFile.available()) {
-          Serial.write(readFile.read());
-        }
-        readFile.close();
-        
-        // Clean up
-        SD.remove("/test.txt");
-        Serial.println("[SUCCESS] Cleaned up test file from SD card.");
-      } else {
-        Serial.println("[ERROR] Failed to read test file from SD card.");
-      }
-    } else {
-      Serial.println("[ERROR] Failed to write test file to SD card.");
+// WHO_AM_I, not ACK. A stuck-low SDA ACKs every address and proves nothing —
+// an earlier version of this sketch "found" the MPU at 0x68 AND 0x69 across
+// seven SCL pins, which is impossible and was exactly that artefact.
+static void i2c() {
+  Serial.println("\n--- I2C: MPU-6050 confirmed via WHO_AM_I -------------");
+  const uint8_t cand[][2] = {{6,7},{7,6},{5,6},{6,5},{4,5},{3,1},{20,21}};
+  int hits = 0;
+  for (unsigned c = 0; c < sizeof(cand)/sizeof(cand[0]); c++) {
+    Wire.end(); delay(25);
+    if (!Wire.begin(cand[c][0], cand[c][1], 100000)) continue;
+    Wire.setTimeOut(25); delay(8);
+    for (uint8_t a = 0x68; a <= 0x69; a++) {
+      Wire.beginTransmission(a); Wire.write(0x75);
+      if (Wire.endTransmission(false) != 0) continue;
+      if (Wire.requestFrom((int)a, 1) != 1) continue;
+      const uint8_t who = Wire.read();
+      Serial.printf("  SDA=%u SCL=%u 0x%02X -> WHO_AM_I=0x%02X %s\n", cand[c][0], cand[c][1], a, who,
+                    (who == 0x68 || who == 0x70 || who == 0x71) ? "<<< REAL MPU" : "(bogus)");
+      hits++;
     }
-  } else {
-    Serial.println("[ERROR] MicroSD card mounting failed! Check wiring (CS=2, MOS=3, SCK=4, MISO=5).");
+  }
+  Wire.end();
+  if (!hits) Serial.println("  nothing answered a register read on any candidate pair");
+}
+
+static void sd() {
+  Serial.println("\n--- MICROSD (CS=2 SCK=4 MISO=5 MOSI=3) ---------------");
+  SPI.end(); SPI.begin(4, 5, 3, 2);
+  if (SD.begin(2)) { Serial.printf("  mounted, %llu MB\n", SD.cardSize() >> 20); SD.end(); }
+  else Serial.println("  mount FAILED");
+}
+
+static void gps() {
+  Serial.println("\n--- GPS ----------------------------------------------");
+  Serial.println("  NOTE: the NEO-6M runs off +5V from the Wemos shield via SW1,");
+  Serial.println("  NOT from USB. With no battery attached it has no power and");
+  Serial.println("  silence here says nothing about the wiring.");
+  const uint32_t bauds[] = {9600, 115200};
+  for (int b = 0; b < 2; b++) for (int sw = 0; sw < 2; sw++) {
+    const uint8_t rx = sw ? 1 : 10, tx = sw ? 10 : 1;
+    HardwareSerial s(1); s.begin(bauds[b], SERIAL_8N1, rx, tx);
+    uint32_t n = 0, d = 0; const uint32_t t0 = millis();
+    while (millis() - t0 < 1200) while (s.available()) { char c = s.read(); n++; if (c == 36) d++; }
+    s.end();
+    Serial.printf("  RX=%-2u TX=%-2u @%6lu : %lu bytes, %lu NMEA%s\n", rx, tx,
+                  (unsigned long)bauds[b], (unsigned long)n, (unsigned long)d, d ? "  <<< GPS HERE" : "");
   }
 }
+
+void setup() { Serial.begin(115200); delay(1500); }
 
 void loop() {
-  // Read GPS serial continuously
-  while (GPSSerial.available() > 0) {
-    char c = GPSSerial.read();
-    gps.encode(c);
-  }
-  
-  static uint32_t lastPrintMs = 0;
-  uint32_t now = millis();
-  
-  if (now - lastPrintMs >= 1000) {
-    lastPrintMs = now;
-    
-    Serial.println("\n--- DIAGNOSTIC SAMPLE ---");
-    
-    // Battery
-    float battVolts = getBatteryVoltage();
-    uint8_t battPct = getBatteryPercent(battVolts);
-    Serial.printf("Battery: %.2fV (%u%%)\n", battVolts, battPct);
-    
-    // Accel
-    int16_t ax = 0, ay = 0, az = 0;
-    readAccel(ax, ay, az);
-    // Convert to Gs (full scale ±4g -> sensitivity is 8192 LSB/g)
-    float gax = ax / 8192.0;
-    float gay = ay / 8192.0;
-    float gaz = az / 8192.0;
-    Serial.printf("MPU-6050 Accel: ax=%d (%.3fg), ay=%d (%.3fg), az=%d (%.3fg)\n", ax, gax, ay, gay, az, gaz);
-    
-    // GPS Status
-    if (gps.satellites.isValid()) {
-      Serial.printf("GPS Satellites: %u\n", gps.satellites.value());
-    } else {
-      Serial.println("GPS Satellites: Unknown");
-    }
-    
-    if (gps.location.isValid()) {
-      Serial.printf("GPS Location: Lat=%.6f, Lng=%.6f, Alt=%.1fm, Speed=%.2f km/h\n", 
-                    gps.location.lat(), gps.location.lng(), gps.altitude.meters(), gps.speed.kmph());
-    } else {
-      Serial.println("GPS Location: No lock (Wait for outdoor view/clear sky)");
-    }
-    
-    // NMEA debug
-    Serial.printf("GPS Sentences Processed: %u, Failed Checksums: %u\n", 
-                  gps.charsProcessed(), gps.failedChecksum());
-  }
+  Serial.println("\n\n#### BIKESENSOR DIAGNOSTIC ####");
+  pinStates(); sd(); i2c(); gps();
+  Serial.println("\n#### END ####");
+  delay(20000);
 }
