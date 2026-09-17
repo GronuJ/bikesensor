@@ -542,6 +542,7 @@
       "netlist": "",
       "plot": "production/",
       "specctra_dsn": "",
+      "step": "",
       "vrml": ""
     },
     "page_layout_descr_file": ""
@@ -676,7 +677,7 @@
         "uuid": "92844cda-fb34-4359-9dbb-e14c64aaab65"
       }
     ],
-    "used_designators": "H1-4,SW1",
+    "used_designators": "#PWR18,R3,H1-4,SW1",
     "variants": []
   },
   "sheets": [

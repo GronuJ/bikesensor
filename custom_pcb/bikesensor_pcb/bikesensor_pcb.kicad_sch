@@ -2686,6 +2686,16 @@
 	)
 	(wire
 		(pts
+			(xy 173.99 45.72) (xy 173.99 50.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4404d2d1-547a-41b3-85ad-4f58ab07a913")
+	)
+	(wire
+		(pts
 			(xy 99.06 63.5) (xy 110.49 63.5)
 		)
 		(stroke
@@ -2733,6 +2743,16 @@
 			(type default)
 		)
 		(uuid "59d36ca1-8bd0-4835-9cd4-f9eeb72cf94e")
+	)
+	(wire
+		(pts
+			(xy 166.37 58.42) (xy 173.99 58.42)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "610c5acc-e226-417f-b492-c481bab3cdde")
 	)
 	(wire
 		(pts
@@ -3363,6 +3383,16 @@
 			(justify left bottom)
 		)
 		(uuid "a08697c9-9b93-4a4c-8c3d-26294232c4b9")
+	)
+	(label "SPI_CS"
+		(at 173.99 45.72 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a1e952b2-e109-4a81-8438-00f7d197c069")
 	)
 	(label "UART_TX_DEBUG"
 		(at 97.79 106.68 0)
@@ -5747,6 +5777,84 @@
 		)
 	)
 	(symbol
+		(lib_id "power:+3V3")
+		(at 166.37 58.42 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "d007c966-4c37-47dd-a3e8-79dc4c598175")
+		(property "Reference" "#PWR018"
+			(at 166.37 62.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 166.37 53.34 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 166.37 58.42 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 166.37 58.42 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 166.37 58.42 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "17c45874-cfd7-48ca-bcb1-24ac7304e4df")
+		)
+		(instances
+			(project "bikesensor_pcb"
+				(path "/92844cda-fb34-4359-9dbb-e14c64aaab65"
+					(reference "#PWR018")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 160.02 146.05 0)
 		(unit 1)
@@ -6213,6 +6321,88 @@
 			(project "bikesensor_pcb"
 				(path "/92844cda-fb34-4359-9dbb-e14c64aaab65"
 					(reference "#PWR05")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 173.99 54.61 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "f8e5d6d2-f360-4c8c-81be-8c69d5be9557")
+		(property "Reference" "R3"
+			(at 176.53 53.3399 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10k"
+			(at 176.53 55.8799 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal"
+			(at 172.212 54.61 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 173.99 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 173.99 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "e34432be-04ed-405d-b5ac-2db4171b97f5")
+		)
+		(pin "1"
+			(uuid "95c18749-ebd6-4506-aeaa-9ddd54e3e202")
+		)
+		(instances
+			(project "bikesensor_pcb"
+				(path "/92844cda-fb34-4359-9dbb-e14c64aaab65"
+					(reference "R3")
 					(unit 1)
 				)
 			)
