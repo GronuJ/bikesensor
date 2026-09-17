@@ -4,9 +4,19 @@
 
 `bikesensor` turns an ESP32-C3 SuperMini, an MPU-6050 IMU, a NEO-6M GPS, and an SPI MicroSD card module into a standalone, battery-powered mapping box. 
 
-When you ride, the device autonomously records high-frequency (100 Hz) vertical accelerometer vibrations and sparse (1 Hz) GPS coordinate ticks into unified local CSV log files on the SD card. When you return home, the device automatically connects to your home Wi-Fi, uploads all offline ride CSVs in a fast burst to a local 24/7 Raspberry Pi homeserver running a FastAPI server, wipes the SD card, and goes back to sleep.
+When you ride, the device autonomously records high-frequency (200 Hz) vertical accelerometer vibrations and sparse (1 Hz) GPS coordinate ticks into unified local CSV log files on the SD card. When you return home, the device connects to your home Wi-Fi and uploads all offline ride CSVs over HTTPS.
 
-The backend automatically runs linear interpolation, Butterworth filtering, and Short-Time Fourier Transforms (STFT) to map road surface roughness (PSD heatmaps) and flag curb shocks in an interactive Streamlit dashboard.
+The pipeline runs linear interpolation, Butterworth filtering, and Short-Time Fourier Transforms (STFT) to map road surface roughness (PSD heatmaps) and flag curb shocks.
+
+---
+
+## ⚠️ Project status
+
+This README documents the **original Raspberry Pi architecture**, which is being retired. Read §3–§7 with that in mind:
+
+* **The firmware no longer uploads to the Pi.** It posts to `https://kiel.earth` over TLS. The FastAPI server and Streamlit dashboard in `src/` still run and remain the reference DSP implementation, but they are no longer the device's upload target.
+* **The custom PCB has been re-laid-out** and is smaller than the gerbers in `custom_pcb/bikesensor_pcb/production/`, which are stale. **Do not order from them.** Two known issues are open — see the bottom of `custom_pcb/PIN_VERIFICATION.md`.
+* **The hardware has never produced a real ride.** Every figure produced so far comes from synthetic signals.
 
 ---
 
@@ -89,9 +99,10 @@ To protect your home Wi-Fi passwords from being committed to Git, create a file 
 #pragma once
 #define WIFI_SSID "YourHomeSSID"
 #define WIFI_PASS "YourHomePassword"
-#define SERVER_HOST "bikesensor-server.local"  // preferred: mDNS host
-#define SERVER_PORT 8000
-#define SERVER_UPLOAD_PATH "/api/upload-offline"
+#define SERVER_HOST "kiel.earth"
+#define SERVER_PORT 443
+#define SERVER_UPLOAD_PATH "/api/bike/ingest"
+#define DEVICE_TOKEN "your-device-token"   // sent as: Authorization: Bearer <token>
 ```
 The firmware preprocessor will automatically detect and include this file during compile, keeping your passwords safe and isolated in your local workspace.
 
@@ -104,9 +115,11 @@ pio device monitor -b 115200     # Real-time console debugger
 
 ---
 
-## 4. Raspberry Pi Server Deployment (Systemd)
+## 4. Raspberry Pi Server Deployment (Systemd) — *legacy*
 
-Both the ingestion server and the Streamlit dashboard run 24/7 in the background on your Raspberry Pi homeserver (`bikesensor-server.local`, current IP: `192.168.0.72`), managed by Linux `systemd` to ensure they automatically start on boot and recover from power cutoffs.
+> Superseded by the `kiel.earth` backend; kept because `src/` still runs this way locally.
+
+Both the ingestion server and the Streamlit dashboard run in the background on the Raspberry Pi homeserver, managed by Linux `systemd` so they start on boot and recover from power cuts.
 
 ### Production Start Commands (no autoreload)
 Use these in your `ExecStart` definitions (or equivalent shell scripts):
@@ -131,18 +144,15 @@ sudo journalctl -u bikesensor-api.service -n 50 -f
 
 ---
 
-## 5. Native macOS Sync Notifications (SSH Hook)
+## 5. Native macOS Sync Notifications — *removed*
 
-To make ride syncing completely frictionless, the Pi homeserver is integrated with a local-only, secure SSH hook that immediately triggers a native macOS notification on your MacBook screen (`Josts-MacBook-Air.local`) upon successful processing.
-
-* **Frictionless Feedback:** As soon as you come home and your ESP32 uploads its files, your Mac slides out a notification chimes (**Glass** sound) notifying you of your synced distance, duration, and processed metrics.
-* **100% Secure & Local:** Communication operates passwordlessly using custom pre-authorized SSH keys (`~/.ssh/authorized_keys`) and standard macOS Remote Login. It fails gracefully (silently in background logs) if your Mac is away or offline, completely preserving system isolation.
+This feature was deleted from the server for privacy and security reasons (commits `3e252cc`, `a728063`). The server no longer performs any outbound notification, SSH call, or audio playback on upload. The section is kept as a marker so the numbering below stays stable; see git history if you want the old implementation.
 
 ---
 
-## 6. Local Network Endpoints
+## 6. Local Network Endpoints — *legacy*
 
-Once the servers are running on your homeserver, they are accessible from any device on your local Wi-Fi:
+When the legacy servers are running, they are reachable from any device on the same Wi-Fi:
 
 * 📊 **Interactive Web Dashboard:** [http://bikesensor-server.local:8501](http://bikesensor-server.local:8501)
   * Displays multi-ride GPS heatmaps of road surface roughness.
@@ -180,5 +190,5 @@ When the ESP32-C3 boots in Wi-Fi sync mode upon returning home, it scans the loc
 
 ### 7.3 Ingestion Processing Modes
 When the FastAPI server receives the upload:
-1.  **Unified Mode (Fully Automated):** If the CSV headers contain `lat` and `lon` fields, the server immediately triggers the DSP pipeline in a background thread. It runs GPS linear interpolation, Butterworth filtering, and STFT, saves the processed segments to the SQLite database (`data/rides.db`), and fires a macOS notification.
-2.  **Pending Mode (Manual GPX Merge):** If GPS coordinate fields are missing or incomplete in the raw log, the server stores the CSV in `data/pending/`. A prompt appears in the Streamlit dashboard sidebar, letting you upload a standard GPX file exported from any standard phone app. The dashboard builds a relative-millisecond clock model, aligns and merges the datasets, runs the analysis, and updates the database.
+1.  **Unified Mode (Fully Automated):** If the CSV headers contain `lat` and `lon` fields, the server immediately triggers the DSP pipeline in a background thread. It runs GPS linear interpolation, Butterworth filtering, and STFT, and saves the processed segments to the SQLite database (`data/rides.db`). A log with fewer than two GPS fixes is **rejected** rather than given fallback coordinates.
+2.  **Pending Mode (Manual GPX Merge):** If GPS coordinate fields are missing or incomplete in the raw log, the server stores the CSV in `data/rides/pending_vibrations/`. **The dashboard UI for merging these does not exist** — `src/dashboard.py` imports `merge_build` but never calls it, so pending files accumulate unprocessed. Merge them manually with `src/merge.py`.
