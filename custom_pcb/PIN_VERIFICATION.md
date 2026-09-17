@@ -4,10 +4,17 @@ Generated from `bikesensor_pcb/bikesensor_pcb.kicad_pcb` (the actual routed netl
 against the firmware constants in `firmware/bikesensor/bikesensor.ino`.
 
 **Why this file exists.** The schematic uses generic `Conn_01x0N_Socket` symbols — "ESP32_Left",
-"MPU6050", "SD_Breakout" are only *Value* strings, not real parts with named pins. The silkscreen's
-only text object is `${REFERENCE}`. So the mapping from header pin number to ESP32 GPIO exists
-nowhere in the design files; it lives only in the README table and the firmware `constexpr`s, and
-neither ERC nor DRC can check it. DRC passing clean means nothing here.
+"MPU6050", "SD_Breakout" are only *Value* strings, not real parts with named pins. So the mapping
+from header pin number to ESP32 GPIO exists nowhere the tools can check; it lives in the README
+table and the firmware `constexpr`s, and neither ERC nor DRC can validate it. DRC passing clean
+means nothing here.
+
+**Update (2026-09-17).** The board now carries 42 silkscreen labels — a short signal name beside
+every connected pin on J1–J5, plus `VBAT`, the J7 switch feed, and module names (`ESP32-C3`, `IMU`,
+`SD`, `GPS`, `SHIELD`). Abbreviations: `GTX`/`GRX` = GPS TX/RX, `DTX`/`DRX` = debug UART,
+`ADC` = battery divider. These are generated from the *routed netlist*, so they describe what the
+copper actually does — but they still say nothing about which ESP32 GPIO lands on which pad, so the
+bench procedure below remains necessary.
 
 ---
 
@@ -120,6 +127,15 @@ the function — with two exceptions:
 
 ## Before the respin
 
-Build a real ESP32-C3 SuperMini schematic symbol with named pins, re-derive the netlist, diff it
-against the firmware constants, and **put signal names on the silkscreen**. Then this file becomes
-unnecessary, which is the point.
+Build a real ESP32-C3 SuperMini schematic symbol with named pins, re-derive the netlist, and diff it
+against the firmware constants. Signal names are now on the silkscreen (done 2026-09-17). Once the
+symbol is real, this file becomes unnecessary, which is the point.
+
+**Two things must happen before this board is fabricated again:**
+
+1. **`+3V3` does not reach C1 pin 1.** The track stops 1.48 mm short of the pad. The bulk capacitor
+   that H4 exists to enlarge is currently floating, so it filters nothing. Route it in KiCad.
+2. **R3, the CS pull-up (H2), is still not in the design.** 10 kΩ from `/SPI_CS` to `+3V3`.
+
+`production/bikesensor.zip` predates the re-layout and is the old oversized board. Re-plot after
+both fixes.
