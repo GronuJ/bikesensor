@@ -131,11 +131,16 @@ Build a real ESP32-C3 SuperMini schematic symbol with named pins, re-derive the 
 against the firmware constants. Signal names are now on the silkscreen (done 2026-09-17). Once the
 symbol is real, this file becomes unnecessary, which is the point.
 
-**Two things must happen before this board is fabricated again:**
+**Both pre-fabrication blockers are now closed (2026-09-17):**
 
-1. **`+3V3` does not reach C1 pin 1.** The track stops 1.48 mm short of the pad. The bulk capacitor
-   that H4 exists to enlarge is currently floating, so it filters nothing. Route it in KiCad.
-2. **R3, the CS pull-up (H2), is still not in the design.** 10 kΩ from `/SPI_CS` to `+3V3`.
+1. ~~`+3V3` does not reach C1 pin 1.~~ Routed. The bulk capacitor is connected.
+2. ~~R3, the CS pull-up (H2), is not in the design.~~ Added: 10 kΩ from `/SPI_CS` to `+3V3`,
+   which resolves **H2**.
 
-`production/bikesensor.zip` predates the re-layout and is the old oversized board. Re-plot after
-both fixes.
+`production/` was re-plotted and `bikesensor.zip` rebuilt from it — verified to contain the
+38.74 × 114.47 mm outline. KiCad DRC reports 0 errors and 0 unconnected pads.
+
+**H3, H4, H5 and H6 are still open** and were never design changes, only cautions:
+H3 (divider upstream of the switch) and H5 (no series resistors on the GPS UART) are unchanged in
+this revision. H4 is partly mitigated — C1 is now actually connected, but it is still 10 µF, not the
+22–47 µF recommended above.

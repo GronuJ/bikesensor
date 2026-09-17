@@ -15,7 +15,7 @@ The pipeline runs linear interpolation, Butterworth filtering, and Short-Time Fo
 This README documents the **original Raspberry Pi architecture**, which is being retired. Read §3–§7 with that in mind:
 
 * **The firmware no longer uploads to the Pi.** It posts to `https://kiel.earth` over TLS. The FastAPI server and Streamlit dashboard in `src/` still run and remain the reference DSP implementation, but they are no longer the device's upload target.
-* **The custom PCB has been re-laid-out** and is smaller than the gerbers in `custom_pcb/bikesensor_pcb/production/`, which are stale. **Do not order from them.** Two known issues are open — see the bottom of `custom_pcb/PIN_VERIFICATION.md`.
+* **The custom PCB has been re-laid-out** to 38.74 × 114.47 mm and re-plotted. `production/bikesensor.zip` matches the current design and passes DRC with zero errors and zero unconnected pads. It has **not been fabricated or assembled yet**, so nothing about it is bench-proven — the header-pin-to-GPIO mapping in particular is still unverified, see `custom_pcb/PIN_VERIFICATION.md`.
 * **The hardware has never produced a real ride.** Every figure produced so far comes from synthetic signals.
 
 ---
@@ -65,6 +65,18 @@ The hardware operates on **3.3V logic** for standard communication and SD loggin
 Here is the physical wiring diagram for our custom carrier board:
 
 ![Bikesensor Electrical Wiring Diagram](assets/wiring-diagram.png)
+
+### Schematic
+
+R3 (10 kΩ) pulls `SPI_CS` to `+3V3`. GPIO2 is an ESP32-C3 strapping pin and must be high or floating at reset; many MicroSD modules hold CS low at power-up, which can stop the chip booting.
+
+![Schematic](assets/schematic.png)
+
+### Board
+
+The carrier is 38.74 × 114.47 mm, 2-layer, all through-hole. Every connected pin carries a silkscreen signal name — `GTX`/`GRX` are the GPS UART, `DTX`/`DRX` the debug UART, and `ADC` the battery divider.
+
+![PCB 3D render](assets/pcb-3d.png)
 
 ### Pin Map Table:
 
