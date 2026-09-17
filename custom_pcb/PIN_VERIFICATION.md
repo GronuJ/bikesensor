@@ -125,6 +125,49 @@ the function — with two exceptions:
 - **H6** No I2C pull-ups on the carrier (relies on the GY-521's); `AD0`/`INT` unterminated; `J6` is
   8 entirely unconnected pins; `GPIO_8`/`GPIO_9` are unterminated stubs on strapping pins.
 
+## Bill of materials
+
+Derived from the footprints in `bikesensor_pcb.kicad_pcb`, not from memory.
+
+| Qty | Ref | Part | Footprint / note |
+| --- | --- | --- | --- |
+| 1 | — | ESP32-C3 SuperMini | seats across J1/J2, rows 15.24 mm (600 mil) apart |
+| 1 | — | GY-521 (MPU-6050) | J3. **Supplies the I2C pull-ups** — the carrier has none |
+| 1 | — | GY-NEO6MV2 GPS | J5. Must have its own regulator and 3.3 V logic; it is fed from 5 V with no level shifting |
+| 1 | — | MicroSD SPI breakout | J4 |
+| 1 | — | Wemos D1 Mini TP5400 battery shield + LiPo | J6/J7/J8, rows 22.86 mm (900 mil) apart |
+| 5 | J1 J2 J3 J6 J7 | 1x08 female header, 2.54 mm | J6 is 8 electrically dead pins; it only holds the shield level |
+| 1 | J4 | 1x06 female header, 2.54 mm | |
+| 1 | J5 | 1x04 female header, 2.54 mm | |
+| 1 | J8 | 1x01 female header, 2.54 mm | VBAT sense |
+| 2 | R1 R2 | 100 kΩ axial | `R_Axial_DIN0207`, 7.62 mm pitch |
+| 1 | R3 | 10 kΩ axial | 7.62 mm pitch. CS pull-up; resolves **H2** |
+| 1 | C1 | 22–47 µF electrolytic | `CP_Radial_D5.0mm_P2.00mm`. 10 µF fits but is marginal — see **H4** |
+| 2 | C2 C3 | 100 nF ceramic disc | `C_Disc_D5.0mm`, 5.00 mm pitch |
+| 1 | SW1 | **C&K OS102011MS2Q** | See below — not a generic part |
+| 2 | — | 1 kΩ axial *(optional)* | Series resistors on the GPS UART, **H5**. No footprint; fit inline on the wires |
+
+**Use sockets, not direct soldering.** Being able to unseat the ESP32 is what allowed the previous
+board's fault to be localised in software when no multimeter was available.
+
+### SW1 is not substitutable
+
+The footprint is **2.0 mm pitch**, three signal pins, with two mounting pegs 8.2 mm apart. A generic
+2.54 mm slide switch **will not fit**. Buy the C&K part (or a pin-compatible C&K OS-series device)
+from a distributor that carries C&K — Mouser, Digi-Key, Farnell or RS.
+
+If you cannot get it, the board still works: solder a wire jumper between SW1 pads 1 and 2 to
+hard-wire the 5 V rail on, or run flying leads to any SPDT switch off-board. You lose only the
+power cut-off, not any function.
+
+### PCB
+
+2-layer, **38.74 x 114.47 mm**, 1.6 mm, HASL is fine — everything is through-hole with no fine
+pitch. Note the board is longer than 100 mm, so it falls outside the cheapest fixed-price tier at
+most prototype fabs. Upload `production/bikesensor.zip`.
+
+---
+
 ## Before the respin
 
 Build a real ESP32-C3 SuperMini schematic symbol with named pins, re-derive the netlist, and diff it
