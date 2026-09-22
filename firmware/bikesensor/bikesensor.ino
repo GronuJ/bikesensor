@@ -269,8 +269,12 @@ bool attemptWiFiSync() {
     File entry = root.openNextFile();
     if (!entry) break; // No more files
 
+    // Every ride file makeRideFilename() can produce starts with "r": r<date>_<time>.csv,
+    // its salted variant, and rboot_<hex>.csv. The old ride_NNN.csv names match too,
+    // so a card logged by older firmware still drains. This used to require "ride_",
+    // which silently skipped every ride once the names changed.
     String filename = entry.name();
-    if (filename.startsWith("ride_") && filename.endsWith(".csv")) {
+    if (!entry.isDirectory() && filename.startsWith("r") && filename.endsWith(".csv")) {
       filesToSync.push_back(filename);
     }
     entry.close();
