@@ -1,6 +1,11 @@
-# Ride logs (not committed)
+# Ride data and logs (not committed)
+data/
 *.gpx
 *.csv
+
+# Python bytecode (e.g. from running old revisions)
+__pycache__/
+*.py[oc]
 
 # OS
 .DS_Store
