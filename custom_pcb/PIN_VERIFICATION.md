@@ -82,8 +82,9 @@ If you would rather skip it: still clip leg 5, and leave R1 unfitted. The logger
 
 The module's **5V pin goes into J1.1** (square pad, next to the `+5V`/`GND`/`3V3` silkscreen). Rotated
 180°, the module's 5V pin would sit on `GPS_RX` and its IO pins on the supply rails. Before powering
-up, check that the labels printed on the module match row A/row B above — that is the one remaining
-assumption, and reading the module's silkscreen settles it without a meter.
+up, check that the labels printed on the module match row A/row B above. Jost confirmed on
+2026-09-22 that the module he ordered (AliExpress "ESP32 C3 SuperMini Development Board") has this
+pin order, so the mapping above applies to it.
 
 ### Strapping pins at reset, as actually wired
 
