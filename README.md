@@ -4,17 +4,12 @@
 
 `bikesensor` turns an ESP32-C3 SuperMini, an MPU-6050 IMU, a NEO-6M GPS, and an SPI MicroSD card module into a standalone, battery-powered mapping box. 
 
-When you ride, the device autonomously records high-frequency (200 Hz) vertical accelerometer vibrations and sparse (1 Hz) GPS coordinate ticks into unified local CSV log files on the SD card. When you return home, the device connects to your home Wi-Fi and uploads all offline ride CSVs over HTTPS.
-
-The pipeline runs linear interpolation, Butterworth filtering, and Short-Time Fourier Transforms (STFT) to map road surface roughness (PSD heatmaps) and flag curb shocks.
+When you ride, the device autonomously records high-frequency (200 Hz) vertical accelerometer vibrations and sparse (1 Hz) GPS coordinate ticks into unified local CSV log files on the SD card. When you return home, the device connects to your home Wi-Fi and uploads all offline ride CSVs over HTTPS to [kiel.earth](https://kiel.earth), where the rides are stored, processed and mapped. That website lives in its own repository; this one holds the firmware, the carrier PCB and the enclosure.
 
 ---
 
 ## ⚠️ Project status
 
-This README documents the **original Raspberry Pi architecture**, which is being retired. Read §3–§7 with that in mind:
-
-* **The firmware no longer uploads to the Pi.** It posts to `https://kiel.earth` over TLS. The FastAPI server and Streamlit dashboard in `src/` still run and remain the reference DSP implementation, but they are no longer the device's upload target.
 * **The custom PCB has been re-laid-out** to 38.74 × 114.47 mm and re-plotted. `production/bikesensor.zip` matches the current design and passes DRC with zero errors and zero unconnected pads. It has **not been fabricated or assembled yet**, so nothing about it is bench-proven — the header-pin-to-GPIO mapping in particular is still unverified, see `custom_pcb/PIN_VERIFICATION.md`.
 * **The hardware has never produced a real ride.** Every figure produced so far comes from synthetic signals.
 
@@ -42,17 +37,11 @@ flowchart TD
     end
 
     subgraph Home [2. Arrival Home & Wi-Fi Sync]
-        ESP_H[ESP32-C3 Home Mode] -->|Connects to Wi-Fi 'vamos!'| Router((Home Router))
-        SD -->|Stream CSVs over POST| ESP_H
-        ESP_H -->|HTTP Ingestion| Pi[Raspberry Pi 3 B+]
-        Pi -->|Save processed rides| DB[(SQLite Database)]
-        Pi -->|Wipe local files| ESP_H
-    end
-
-    subgraph Analytics [3. Interactive Analytics]
-        Browser[Web Client / Mac] -->|Access Dashboard| Web[Streamlit Server Port 8501]
-        DB --> Web
-        Web -->|Display heatmaps & curbs| Browser
+        ESP_H[ESP32-C3 Home Mode] -->|Connects to home Wi-Fi| Router((Home Router))
+        SD -->|Stream CSVs over HTTPS POST| ESP_H
+        ESP_H -->|/api/bike/ingest| Site[kiel.earth]
+        Site -->|2xx: file is stored| ESP_H
+        ESP_H -->|Delete uploaded file| SD
     end
 ```
 
@@ -127,80 +116,27 @@ pio device monitor -b 115200     # Real-time console debugger
 
 ---
 
-## 4. Raspberry Pi Server Deployment (Systemd) — *legacy*
+## 4. Device-to-Server Interface
 
-> Superseded by the `kiel.earth` backend; kept because `src/` still runs this way locally.
+The logging box talks to the website over a single HTTPS endpoint.
 
-Both the ingestion server and the Streamlit dashboard run in the background on the Raspberry Pi homeserver, managed by Linux `systemd` so they start on boot and recover from power cuts.
-
-### Production Start Commands (no autoreload)
-Use these in your `ExecStart` definitions (or equivalent shell scripts):
-```bash
-uv run uvicorn src.server:app --host 0.0.0.0 --port 8000
-uv run streamlit run src/dashboard.py --server.port 8501 --server.address 0.0.0.0
-```
-
-### Systemd Control Commands:
-```bash
-# Check the real-time status of the servers
-sudo systemctl status bikesensor-api.service
-sudo systemctl status bikesensor-dashboard.service
-
-# Restart the services
-sudo systemctl restart bikesensor-api.service
-sudo systemctl restart bikesensor-dashboard.service
-
-# Read the last 50 lines of background execution logs
-sudo journalctl -u bikesensor-api.service -n 50 -f
-```
-
----
-
-## 5. Native macOS Sync Notifications — *removed*
-
-This feature was deleted from the server for privacy and security reasons (commits `3e252cc`, `a728063`). The server no longer performs any outbound notification, SSH call, or audio playback on upload. The section is kept as a marker so the numbering below stays stable; see git history if you want the old implementation.
-
----
-
-## 6. Local Network Endpoints — *legacy*
-
-When the legacy servers are running, they are reachable from any device on the same Wi-Fi:
-
-* 📊 **Interactive Web Dashboard:** [http://bikesensor-server.local:8501](http://bikesensor-server.local:8501)
-  * Displays multi-ride GPS heatmaps of road surface roughness.
-  * Details vertical curb-shock warnings, average ride statistics, and PSD frequency spectrum graphs.
-* 🔌 **FastAPI Ingestion Endpoint:** `http://bikesensor-server.local:8000/api/upload-offline`
-  * Accepts raw CSV POST requests directly from the ESP32 wireless logging box.
-  * Automatically parses GPS/IMU fields, interpolates timestamps, runs STFT, and registers in `data/rides.db` (SQLite).
-* ❤️ **API Health Endpoint:** `http://bikesensor-server.local:8000/health`
-  * Returns quick service/DB liveness status for monitoring.
-
----
-
-## 7. Device-to-Server Interfacing
-
-The communication between the hardware logging box and the backend server operates over a lightweight, wireless HTTP API.
-
-### 7.1 CSV Log Data Format
+### 4.1 CSV Log Data Format
 When writing to the MicroSD card, the device registers data in a unified, comma-separated format:
 ```csv
 millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time
 ```
 *   `millis`: Relative milliseconds from ESP32 boot (used to align high-frequency vibration data).
-*   `ax,ay,az`: Raw vertical/lateral/longitudinal accelerometer values (scaled inside the DSP pipeline).
+*   `ax,ay,az`: Raw vertical/lateral/longitudinal accelerometer values (the ±4 g scale, `1/8192`, is applied on the website, not on the device).
 *   `lat,lon,ele,speed_kmh`: GPS coordinate details.
 *   `battery_pct`: Divided battery measurement (`0 - 100%`) read from `GPIO 0`.
 *   `gps_time`: GPS UTC timestamp (used as a clock reference).
 
-### 7.2 Wireless Sync Protocol
-When the ESP32-C3 boots in Wi-Fi sync mode upon returning home, it scans the local storage, reads the log files, and performs an HTTP POST request:
+### 4.2 Wireless Sync Protocol
+When the ESP32-C3 boots in Wi-Fi sync mode upon returning home, it uploads every ride file on the SD card, one HTTPS request each:
 
 *   **HTTP Method:** `POST`
-*   **Request URL:** `http://bikesensor-server.local:8000/api/upload-offline`
-*   **Request Header:** `X-Ride-Filename: <filename>` (e.g., `ride_001.csv`)
-*   **Request Body:** Raw CSV file text content (UTF-8 encoded).
+*   **Request URL:** `https://kiel.earth/api/bike/ingest` (set by `SERVER_HOST` / `SERVER_UPLOAD_PATH`)
+*   **Request Headers:** `Content-Type: text/csv`, `Authorization: Bearer <DEVICE_TOKEN>`, `X-Ride-Id: <filename without .csv>`
+*   **Request Body:** the raw CSV file.
 
-### 7.3 Ingestion Processing Modes
-When the FastAPI server receives the upload:
-1.  **Unified Mode (Fully Automated):** If the CSV headers contain `lat` and `lon` fields, the server immediately triggers the DSP pipeline in a background thread. It runs GPS linear interpolation, Butterworth filtering, and STFT, and saves the processed segments to the SQLite database (`data/rides.db`). A log with fewer than two GPS fixes is **rejected** rather than given fallback coordinates.
-2.  **Pending Mode (Manual GPX Merge):** If GPS coordinate fields are missing or incomplete in the raw log, the server stores the CSV in `data/rides/pending_vibrations/`. **The dashboard UI for merging these does not exist** — `src/dashboard.py` imports `merge_build` but never calls it, so pending files accumulate unprocessed. Merge them manually with `src/merge.py`.
+The device deletes a file from the SD card only after a 2xx response. On a timeout, TLS failure or any other status it keeps the file and retries on the next sync.
