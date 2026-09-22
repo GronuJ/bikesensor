@@ -1,11 +1,18 @@
 // ESP32-C3 Pure IoT Standalone Bike Mapping Logger & Wi-Fi Sync.
 //
-// Wiring (ESP32-C3 SuperMini):
-//   MPU-6050 (I2C): SDA->GPIO 6, SCL->GPIO 7
-//   MicroSD (SPI):  VCC->3V3, GND->GND, SCK->GPIO 4, MISO->GPIO 5, MOSI->GPIO 3, CS->GPIO 2
-//   NEO-6M (GPS):   VCC->5V, GND->GND, TX->GPIO 10 (ESP32 RX), RX->GPIO 1 (ESP32 TX)
+// Wiring (ESP32-C3 SuperMini) — two pin maps, see the PIN MAP block below:
+//   Carrier PCB (default build, env esp32-c3-supermini):
+//     MPU-6050 (I2C): SDA->GPIO 1, SCL->GPIO 2
+//     MicroSD (SPI):  SCK->GPIO 5, MISO->GPIO 0, MOSI->GPIO 6, CS->GPIO 7
+//     NEO-6M (GPS):   UART on GPIO 8 / GPIO 21, direction detected at boot
+//     Battery:        GPIO 3, only after the J2.5 -> J1.5 bodge
+//   Hand-wired prototype (env handwired):
+//     MPU-6050 (I2C): SDA->GPIO 6, SCL->GPIO 7
+//     MicroSD (SPI):  SCK->GPIO 4, MISO->GPIO 5, MOSI->GPIO 3, CS->GPIO 2
+//     NEO-6M (GPS):   UART on GPIO 10 / GPIO 1, direction detected at boot
+//     Battery:        GPIO 0
 //
-// Build: PlatformIO (firmware/platformio.ini), env esp32-c3-supermini.
+// Build: PlatformIO (firmware/platformio.ini).
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -49,21 +56,42 @@ extern const uint8_t rootca_crt_bundle_start[] asm("_binary_x509_crt_bundle_star
 #define DEVICE_TOKEN "set_me_in_private_credentials_h"
 #endif
 
-// SPI Pins for MicroSD Card Reader
+// ---------- PIN MAP ----------
+// The carrier PCB's J1/J2 were routed against a SuperMini pinout that does not
+// exist, so every signal lands on a different GPIO than the hand-wired prototype
+// used. The C3's GPIO matrix lets SPI, I2C and UART sit on any pin, so the
+// firmware absorbs it; only the battery ADC needed a bodge.
+// See custom_pcb/PIN_VERIFICATION.md.
+#ifdef BIKESENSOR_HANDWIRED
 static constexpr uint8_t PIN_SPI_SCK  = 4;
 static constexpr uint8_t PIN_SPI_MISO = 5;
 static constexpr uint8_t PIN_SPI_MOSI = 3;
 static constexpr uint8_t PIN_SPI_CS   = 2;
-
-// UART Pins for NEO-6M GPS Module
-static constexpr uint8_t PIN_GPS_RX   = 10; // Connects to GPS TX
-static constexpr uint8_t PIN_GPS_TX   = 1;  // Connects to GPS RX
+static constexpr uint8_t PIN_I2C_SDA  = 6;
+static constexpr uint8_t PIN_I2C_SCL  = 7;
+// The two pins wired to the GPS UART. Which one carries the GPS's TX is
+// detected at boot, since breakouts ship with either header order.
+static constexpr uint8_t PIN_GPS_A    = 10;
+static constexpr uint8_t PIN_GPS_B    = 1;
+static constexpr uint8_t PIN_BATTERY  = 0;
+static constexpr int8_t  PIN_LED      = 8;  // onboard blue LED, active-low
+#else
+static constexpr uint8_t PIN_SPI_SCK  = 5;  // J2.1
+static constexpr uint8_t PIN_SPI_MISO = 0;  // J1.8
+static constexpr uint8_t PIN_SPI_MOSI = 6;  // J2.2
+static constexpr uint8_t PIN_SPI_CS   = 7;  // J2.3, R3 pull-up
+static constexpr uint8_t PIN_I2C_SDA  = 1;  // J1.7
+static constexpr uint8_t PIN_I2C_SCL  = 2;  // J1.6
+static constexpr uint8_t PIN_GPS_A    = 21; // J2.8 -> J5.3
+static constexpr uint8_t PIN_GPS_B    = 8;  // J2.4 -> J5.2
+// BATTERY_ADC is routed to J2.5 = GPIO9, which has no ADC. Readings are only
+// real after the bodge wire moves the divider to J1.5 = GPIO3.
+static constexpr uint8_t PIN_BATTERY  = 3;
+static constexpr int8_t  PIN_LED      = -1; // GPIO8 carries the GPS UART here
+#endif
 
 // MPU-6050 I2C Address
 static constexpr uint8_t MPU_ADDR = 0x68;
-
-// Battery Divider Pin
-static constexpr uint8_t PIN_BATTERY = 0;
 
 // Logging Parameters
 // 200 Hz, not 100. Cobblestone excites the frame at (speed / sett pitch): 10cm
@@ -83,6 +111,50 @@ bool isLoggingActive = false;
 TinyGPSPlus gps;
 HardwareSerial GPSSerial(1); // Use hardware UART1
 
+// ---------- STATUS LED ----------
+static void ledSet(bool on) {
+  if (PIN_LED >= 0) digitalWrite(PIN_LED, on ? LOW : HIGH); // active-low
+}
+
+// ---------- GPS UART ----------
+// Listens on one pin with TX left unassigned, so nothing drives a line the GPS
+// may itself be driving. The NEO-6M emits sentences every second, fix or not.
+static bool gpsTalksOn(uint8_t rxPin, uint32_t baud) {
+  static const char kTalker[] = "$GP";
+  GPSSerial.begin(baud, SERIAL_8N1, rxPin, -1);
+  uint8_t matched = 0;
+  bool found = false;
+  uint32_t t0 = millis();
+  while (!found && millis() - t0 < 1500) {
+    while (GPSSerial.available() > 0) {
+      char c = GPSSerial.read();
+      matched = (c == kTalker[matched]) ? matched + 1 : (c == '$' ? 1 : 0);
+      if (matched == 3) { found = true; break; }
+    }
+    delay(5);
+  }
+  GPSSerial.end();
+  return found;
+}
+
+static void gpsBegin() {
+  const uint8_t pins[2] = {PIN_GPS_A, PIN_GPS_B};
+  // 115200 is what the module was configured to on the prototype; 9600 is the
+  // NEO-6M factory default, in case that setting was never saved.
+  const uint32_t bauds[2] = {115200, 9600};
+  for (uint32_t baud : bauds) {
+    for (int i = 0; i < 2; i++) {
+      if (gpsTalksOn(pins[i], baud)) {
+        GPSSerial.begin(baud, SERIAL_8N1, pins[i], pins[1 - i]);
+        Serial.printf("NEO-6M found: GPS TX on GPIO %u, %lu baud.\n", pins[i], (unsigned long)baud);
+        return;
+      }
+    }
+  }
+  Serial.println("⚠ No NMEA on either GPS pin. Check J5 and GPS power; assuming the default order.");
+  GPSSerial.begin(bauds[0], SERIAL_8N1, pins[0], pins[1]);
+}
+
 // ---------- BATTERY MEASUREMENT ----------
 static uint8_t getBatteryPercent() {
   float mv = analogReadMilliVolts(PIN_BATTERY) * 2.0; 
@@ -100,7 +172,7 @@ static void w8(uint8_t reg, uint8_t v) {
 }
 
 static void mpuInit() {
-  Wire.begin(6, 7, 400000); // SDA=GPIO 6, SCL=GPIO 7
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
   w8(0x6B, 0x80); delay(100); // Reset MPU-6050
   w8(0x6B, 0x01);             // Clock source PLL with X gyro
   w8(0x1A, 0x02);             // DLPF CONFIG: Accel BW = 94Hz — the anti-alias filter
@@ -161,11 +233,10 @@ bool attemptWiFiSync() {
 
   // Wait up to 6 seconds for Wi-Fi connection with rapid visual LED feedback!
   int attempts = 0;
-  pinMode(8, OUTPUT);
   while (WiFi.status() != WL_CONNECTED && attempts < 12) {
-    digitalWrite(8, LOW);  // Turn LED ON (active-low)
+    ledSet(true); // Turn LED ON
     delay(100);
-    digitalWrite(8, HIGH); // Turn LED OFF
+    ledSet(false); // Turn LED OFF
     delay(400);
     Serial.print(".");
     attempts++;
@@ -173,13 +244,13 @@ bool attemptWiFiSync() {
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nWi-Fi connection failed. Starting standalone logging mode!");
-    digitalWrite(8, HIGH); // Ensure LED is OFF
+    ledSet(false); // Ensure LED is OFF
     WiFi.disconnect(true);
     return false;
   }
 
   Serial.println("\nConnected to home Wi-Fi!");
-  digitalWrite(8, LOW); // Turn LED solid ON to indicate active connected/syncing mode!
+  ledSet(true); // Turn LED solid ON to indicate active connected/syncing mode!
   Serial.println("Checking SD card for offline rides to sync...");
   const String serverUrl = getServerUrl();
   Serial.printf("Using upload endpoint: %s\n", serverUrl.c_str());
@@ -266,7 +337,7 @@ bool attemptWiFiSync() {
   }
   
   Serial.println("Offline ride sync sequence completed.");
-  digitalWrite(8, HIGH); // Turn LED OFF when sync is fully completed!
+  ledSet(false); // Turn LED OFF when sync is fully completed!
   return true;
 }
 
@@ -322,8 +393,8 @@ void setup() {
   Serial.println("=== BIKESENSOR STANDALONE GPS + SD LOGGER ===");
 
   // Initialize onboard blue LED immediately and turn it OFF (active-low)
-  pinMode(8, OUTPUT);
-  digitalWrite(8, HIGH);
+  if (PIN_LED >= 0) pinMode(PIN_LED, OUTPUT);
+  ledSet(false);
 
   // Initialize custom SPI for MicroSD Module
   SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_CS);
@@ -331,9 +402,9 @@ void setup() {
     Serial.println("❌ ERROR: MicroSD card mounting failed! Check wiring.");
     // Hardware Alert: Rapidly flash the LED (100ms ON / 100ms OFF) to signal SD card failure
     while (1) {
-      digitalWrite(8, LOW);  // ON
+      ledSet(true); // ON
       delay(100);
-      digitalWrite(8, HIGH); // OFF
+      ledSet(false); // OFF
       delay(100);
     }
   }
@@ -342,12 +413,11 @@ void setup() {
   // Check if we can sync with home Wi-Fi and upload saved rides
   bool synced = attemptWiFiSync();
 
-  // Initialize NEO-6M GPS Module on UART1 (115200 Baud verified)
-  GPSSerial.begin(115200, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
-  Serial.println("NEO-6M GPS Module Serial Interface Started.");
+  // Initialize NEO-6M GPS Module on UART1
+  gpsBegin();
 
   // Initialize I2C bus and MPU-6050
-  Wire.begin(6, 7, 400000); // SDA=GPIO 6, SCL=GPIO 7
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
   
   // Verify that the accelerometer responds over I2C before proceeding
   Wire.beginTransmission(MPU_ADDR);
@@ -355,9 +425,9 @@ void setup() {
     Serial.println("❌ ERROR: MPU-6050 not responding at I2C address 0x68!");
     // Hardware Alert: Double-flash LED rapidly (80ms ON / 80ms OFF) to signal IMU failure
     while (1) {
-      digitalWrite(8, LOW);  // ON
+      ledSet(true); // ON
       delay(80);
-      digitalWrite(8, HIGH); // OFF
+      ledSet(false); // OFF
       delay(80);
     }
   }
@@ -464,7 +534,7 @@ void loop() {
     }
   }
 
-  // 5. Visual LED Indicator system on GPIO 8 (2-Second Heartbeat vs. Rapid GPS Lock Double-Blink)
+  // 5. Visual LED Indicator system on the onboard LED (2-Second Heartbeat vs. Rapid GPS Lock Double-Blink)
   static uint32_t lastLEDMs = 0;
   static int blinkPhase = 0; // 0 = idle, 1 = first blink on, 2 = first blink off, 3 = second blink on
   
@@ -473,22 +543,22 @@ void loop() {
       gpsLockSignal = false;
       blinkPhase = 1;
       lastLEDMs = now;
-      digitalWrite(8, LOW); // Start first flash of GPS lock double-blink (active-low)
+      ledSet(true); // Start first flash of GPS lock double-blink
     }
     
     if (blinkPhase > 0) {
       // Non-blocking double-blink animation for GPS lock:
       // Phase 1 (ON): 15ms -> Phase 2 (OFF): 80ms -> Phase 3 (ON): 15ms -> Phase 0 (Idle)
       if (blinkPhase == 1 && now - lastLEDMs > 15) {
-        digitalWrite(8, HIGH); // OFF
+        ledSet(false); // OFF
         blinkPhase = 2;
         lastLEDMs = now;
       } else if (blinkPhase == 2 && now - lastLEDMs > 80) {
-        digitalWrite(8, LOW);  // ON
+        ledSet(true); // ON
         blinkPhase = 3;
         lastLEDMs = now;
       } else if (blinkPhase == 3 && now - lastLEDMs > 15) {
-        digitalWrite(8, HIGH); // OFF
+        ledSet(false); // OFF
         blinkPhase = 0;        // Animation complete
       }
     } else {
@@ -496,12 +566,12 @@ void loop() {
       static uint32_t lastHeartbeatMs = 0;
       static bool ledHeartbeatState = false;
       if (now - lastHeartbeatMs > 2000) {
-        digitalWrite(8, LOW); // ON
+        ledSet(true); // ON
         lastHeartbeatMs = now;
         ledHeartbeatState = true;
       }
       if (ledHeartbeatState && now - lastHeartbeatMs > 15) {
-        digitalWrite(8, HIGH); // OFF
+        ledSet(false); // OFF
         ledHeartbeatState = false;
       }
     }

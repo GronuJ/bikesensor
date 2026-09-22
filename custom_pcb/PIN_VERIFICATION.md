@@ -1,129 +1,129 @@
 # Pin verification sheet
 
 Generated from `bikesensor_pcb/bikesensor_pcb.kicad_pcb` (the actual routed netlist), cross-referenced
-against the firmware constants in `firmware/bikesensor/bikesensor.ino`.
+against the real ESP32-C3 SuperMini pinout and the firmware constants in
+`firmware/bikesensor/bikesensor.ino`.
 
 **Why this file exists.** The schematic uses generic `Conn_01x0N_Socket` symbols — "ESP32_Left",
 "MPU6050", "SD_Breakout" are only *Value* strings, not real parts with named pins. So the mapping
-from header pin number to ESP32 GPIO exists nowhere the tools can check; it lives in the README
-table and the firmware `constexpr`s, and neither ERC nor DRC can validate it. DRC passing clean
-means nothing here.
-
-**Update (2026-09-17).** The board now carries 42 silkscreen labels — a short signal name beside
-every connected pin on J1–J5, plus `VBAT`, the J7 switch feed, and module names (`ESP32-C3`, `IMU`,
-`SD`, `GPS`, `SHIELD`). Abbreviations: `GTX`/`GRX` = GPS TX/RX, `DTX`/`DRX` = debug UART,
-`ADC` = battery divider. These are generated from the *routed netlist*, so they describe what the
-copper actually does — but they still say nothing about which ESP32 GPIO lands on which pad, so the
-bench procedure below remains necessary.
+from header pin number to ESP32 GPIO exists nowhere the tools can check, and neither ERC nor DRC can
+validate it. DRC passing clean means nothing here.
 
 ---
 
-## What the board actually connects
+## Result (2026-09-22): J1/J2 were routed against the wrong pinout
 
-Net names are as routed. "firmware" is what `bikesensor.ino` expects that signal to be.
-
-| Conn | Pin | Net | Firmware expects |
-| --- | --- | --- | --- |
-| **J1** ESP32_Left | 1 | `+5V` | — |
-| | 2 | `GND` | — |
-| | 3 | `+3V3` | — |
-| | 4 | `GPIO_9` | (unused stub) |
-| | 5 | `GPIO_8` | (unused stub) |
-| | 6 | `I2C_SCL` | GPIO7 |
-| | 7 | `I2C_SDA` | GPIO6 |
-| | 8 | `SPI_MISO` | GPIO5 |
-| **J2** ESP32_Right | 1 | `SPI_SCK` | GPIO4 |
-| | 2 | `SPI_MOSI` | GPIO3 |
-| | 3 | `SPI_CS` | GPIO2 |
-| | 4 | `GPS_TX` | GPIO10 (ESP32 **RX**) |
-| | 5 | `BATTERY_ADC` | GPIO0 |
-| | 6 | `UART_TX_DEBUG` | (GPIO21?) |
-| | 7 | `UART_RX_DEBUG` | (GPIO20?) |
-| | 8 | `GPS_RX` | GPIO1 (ESP32 **TX**) |
-| **J3** MPU6050 | 1–8 | `+3V3`, `GND`, `I2C_SCL`, `I2C_SDA`, `XDA`, `XCL`, `AD0`, `INT` | |
-| **J4** SD_Breakout | 1–6 | `GND`, `+3V3`, `SPI_MISO`, `SPI_MOSI`, `SPI_SCK`, `SPI_CS` | |
-| **J5** NEO-6M | 1–4 | `+5V`, `GPS_TX`, `GPS_RX`, `GND` | |
-
-Geometry: J1 at x=50.80, J2 at x=66.04, both 8 pins on 2.54 mm pitch running +y.
-Row spacing 15.24 mm (600 mil).
-
----
-
-## The thing to check first
-
-J1 pins 1–3 are `+5V, GND, +3V3`, and pins 4–5 are labelled `GPIO_9`, `GPIO_8`. Read together,
-those labels imply the designer assumed the **left row descends**:
+The SuperMini's two rows, counted from the USB-C end, are:
 
 ```
-J1:  5V   GND   3V3   IO9   IO8   IO7   IO6   IO5
-                            SCL   SDA   MISO      <- and firmware wants 7, 6, 5
+row A:  5V   GND  3V3  IO4  IO3  IO2  IO1  IO0
+row B:  IO5  IO6  IO7  IO8  IO9  IO10 IO20 IO21
 ```
 
-If that is the real pinout of your SuperMini, **J1 is correct** — SCL=7, SDA=6, MISO=5 all line up.
+Sources: the pad/pin tables in the [mrtnvgr/KiCad_ESP32-C3-SuperMini](https://github.com/mrtnvgr/KiCad_ESP32-C3-SuperMini)
+footprint and symbol (pad 8 = 5V and pad 9 = IO5 share the same end, rows 15.24 mm apart), and the
+[components101 pin table](https://components101.com/development-boards/esp32c3-mini-development-board-datasheet-pinout).
+The same labels are printed on the module itself.
 
-Applying the same descending logic to J2 gives `IO4, IO3, IO2, IO1, IO0, IO21, IO20, IO10`, which
-lines up for SCK=4, MOSI=3, CS=2, BATTERY_ADC=0 — but puts:
+J1.1–J1.3 are `+5V, GND, +3V3`, so J1 is row A and J1.1 is the USB end. J2.1 sits directly across from
+J1.1, so it is IO5 — this holds whether the module is seated face up or face down, because 5V and IO5
+are at the same end of the module. The board's `GPIO_9`/`GPIO_8` net names came from a pinout that
+does not exist; the copper actually does this:
 
-- `GPS_TX` (J2.4) on **GPIO1**, while firmware reads GPS on **GPIO10**
-- `GPS_RX` (J2.8) on **GPIO10**, while firmware transmits on **GPIO1**
+| Conn.pin | Net (silkscreen) | SuperMini pin | Hand-wired prototype used | Carrier firmware |
+| --- | --- | --- | --- | --- |
+| J1.1 | `+5V` | 5V | | |
+| J1.2 | `GND` | GND | | |
+| J1.3 | `+3V3` | 3V3 | | |
+| J1.4 | `GPIO_9` (stub) | **IO4** | SPI SCK | free |
+| J1.5 | `GPIO_8` (stub) | **IO3** | SPI MOSI | battery ADC, *after the bodge below* |
+| J1.6 | `I2C_SCL` | **IO2** | SPI CS | I2C SCL |
+| J1.7 | `I2C_SDA` | **IO1** | GPS (ESP TX) | I2C SDA |
+| J1.8 | `SPI_MISO` | **IO0** | battery ADC | SPI MISO |
+| J2.1 | `SPI_SCK` | **IO5** | SPI MISO | SPI SCK |
+| J2.2 | `SPI_MOSI` | **IO6** | I2C SDA | SPI MOSI |
+| J2.3 | `SPI_CS` | **IO7** | I2C SCL | SPI CS |
+| J2.4 | `GPS_TX` | **IO8** (onboard LED) | LED | GPS UART, direction auto-detected |
+| J2.5 | `BATTERY_ADC` | **IO9** (BOOT) | — | **none: IO9 has no ADC** |
+| J2.6 | `UART_TX_DEBUG` | IO10 | GPS (ESP RX) | free |
+| J2.7 | `UART_RX_DEBUG` | IO20 | | free |
+| J2.8 | `GPS_RX` | IO21 | | GPS UART, direction auto-detected |
 
-> **⚠ Unconfirmed.** This is inferred from the `GPIO_9`/`GPIO_8` labels plus the firmware constants,
-> **not** from the design files, because the design files contain no ESP32 pin names. There are
-> several ESP32-C3 SuperMini pinout variants in circulation, and I do not know which one this board
-> was laid out against, nor which end of each footprint is pin 1 physically.
->
-> If it holds, GPS TX/RX are swapped and the GPS would never produce a single NMEA sentence —
-> a clean single-fault explanation for a dead build. **Verify with a multimeter before believing it.**
+Not one signal lands where the original firmware expected it. The hand-wired prototype followed the
+firmware, which is why it worked (the 2026-09-16 bench notes — divider on GPIO0, MISO on GPIO5, SDA
+on GPIO6 — describe that hand wiring, not this PCB).
 
----
+**What firmware absorbs.** The C3 routes SPI, I2C and UART through its GPIO matrix to any pin, so the
+default firmware build (`pio run -d firmware`) now uses the "Carrier firmware" column. The original
+map lives on as `pio run -d firmware -e handwired`. The GPS UART tries both carrier pins at boot and
+uses whichever one carries NMEA, so the GPS breakout's header order (VCC-TX-RX-GND vs VCC-RX-TX-GND
+both exist) does not matter.
 
-## Bench procedure
+**What firmware cannot absorb: the battery sense.** `BATTERY_ADC` lands on IO9, which has no ADC
+channel, and IO9 is the BOOT strapping pin: it must read high at reset or the chip enters download
+mode instead of running. With R1/R2 fitted, the divider (VBAT/2 through 50 kΩ) fights the ~45 kΩ
+internal pull-up; that works out to about 2.5 V at a 3.3 V cell against a 2.48 V input-high threshold,
+so a low battery could stop the logger booting.
 
-With the ESP32 module **removed** from its sockets, set a multimeter to continuity and probe from
-each module *pad on the board* to the peripheral header:
+### The one bodge (do it while assembling)
 
-1. Identify J1 pin 1 physically — it is the pad connected to `+5V`, which also goes to J5.1 and SW1.
-   Confirm J1.2 = GND and J1.3 = +3V3. That anchors the orientation.
-2. For each row, write down which SuperMini silkscreen label (5V / G / 3V3 / IO0…IO21) sits over
-   each pad once the module is seated.
-3. Fill the "actual GPIO" column below and compare against "firmware expects" in the table above.
+1. Before soldering J2, **clip off leg 5** of that 8-pin female header (or push its contact out). The
+   module's IO9 then touches a contact that goes nowhere.
+2. On the bottom side, solder a short wire from the **J2.5 pad** (still carrying `BATTERY_ADC` from
+   R1/R2/C3) to the **J1.5 pad** (IO3, ADC1 channel 3; the `GPIO_8` stub has nothing else on it).
 
-| Net | Firmware expects | Actual GPIO (measure) | Match? |
+Result: battery sense on IO3, IO9 left to its internal pull-up and the BOOT button. The firmware's
+carrier build already reads the battery on GPIO3.
+
+If you would rather skip it: still clip leg 5, and leave R1 unfitted. The logger works;
+`battery_pct` in the CSV is meaningless (IO3 floats).
+
+### Seat the module the right way round
+
+The module's **5V pin goes into J1.1** (square pad, next to the `+5V`/`GND`/`3V3` silkscreen). Rotated
+180°, the module's 5V pin would sit on `GPS_RX` and its IO pins on the supply rails. Before powering
+up, check that the labels printed on the module match row A/row B above — that is the one remaining
+assumption, and reading the module's silkscreen settles it without a meter.
+
+### Strapping pins at reset, as actually wired
+
+| Pin | Needs at reset | On the carrier | OK? |
 | --- | --- | --- | --- |
-| `I2C_SCL` | GPIO7 | | |
-| `I2C_SDA` | GPIO6 | | |
-| `SPI_MISO` | GPIO5 | | |
-| `SPI_MOSI` | GPIO3 | | |
-| `SPI_SCK` | GPIO4 | | |
-| `SPI_CS` | GPIO2 | | |
-| `GPS_TX` → ESP RX | GPIO10 | | |
-| `GPS_RX` → ESP TX | GPIO1 | | |
-| `BATTERY_ADC` | GPIO0 | | |
-
-Any mismatch is fixable in firmware alone (change the `constexpr`s) as long as the pin is capable of
-the function — with two exceptions:
-
-- **ADC:** `BATTERY_ADC` must land on an **ADC1** channel (GPIO0–GPIO4 on the C3). ADC2 does not work
-  while Wi-Fi is active, so if the divider ended up on GPIO5+ it cannot be fixed in software.
-- **Strapping:** GPIO2, GPIO8, GPIO9 are strapping pins and must be high/floating at reset.
+| IO2 | high | I2C SCL, pulled up by the GY-521's own pull-ups | yes |
+| IO8 | high only for download mode | GPS UART line, idles high; onboard LED pulls it up too | yes |
+| IO9 | high | internal pull-up + BOOT button, once leg 5 is clipped | yes, after the bodge |
 
 ---
 
-## Other findings (detail in the plan)
+## Cautions, re-evaluated against the real mapping
 
-- **H2** `SPI_CS` is on GPIO2, a strapping pin. SD modules often hold CS low at power-up, which can
-  block boot. Add a 10k pull-up to 3V3, or move CS in the respin.
-- **H3** The `R1`/`R2` divider hangs off `/VBAT` *upstream* of SW1, so ~2.1 V sits on GPIO0 of an
-  unpowered ESP32 whenever a cell is connected and the switch is off. Leakage path into the ESD
-  clamp, plus ~21 µA permanent drain. Move it downstream of the switch.
-- **H4** `+3V3` is sourced from the SuperMini's onboard LDO through a header pin, feeding the
-  MicroSD (100–200 mA write bursts) with only C1 10 µF + C2 100 nF. Scope this rail during a write
-  burst before blaming firmware. Raise bulk to 22–47 µF near the SD socket.
-- **H5** NEO-6M is powered from `+5V` with no level shifting or series resistors on the UART. Safe
-  only if the breakout has its own regulator and 3.3 V logic (GY-NEO6MV2 does). Add ~1k series
-  resistors on both lines regardless.
-- **H6** No I2C pull-ups on the carrier (relies on the GY-521's); `AD0`/`INT` unterminated; `J6` is
-  8 entirely unconnected pins; `GPIO_8`/`GPIO_9` are unterminated stubs on strapping pins.
+- **H2 — closed.** `SPI_CS` is on IO7, not the strapping pin GPIO2. Fit R3 anyway: it keeps the card
+  deselected while the ESP32 boots.
+- **H3 — accepted for this revision.** The R1/R2 divider still hangs off `/VBAT` upstream of SW1.
+  Cost: ~21 µA permanent drain (years on any LiPo) and up to ~36 µA through R1 into the unpowered
+  chip's pin clamp, far inside what the clamp tolerates. Move it downstream of SW1 in the respin.
+  Leaving R1 unfitted removes it entirely.
+- **H4 — fit a bigger C1.** Use 47 µF (≥ 6.3 V, 5 mm diameter, 2.0 mm lead pitch) instead of 10 µF. The
+  3V3 rail comes from the SuperMini's LDO, rated for about 250 mA external load, and SD writes burst
+  to 100–200 mA.
+- **H5 — closed if the GPS is a GY-NEO6MV2.** That breakout has its own 3.3 V regulator (MIC5205), so
+  its UART runs at 3.3 V even though it is fed 5 V. The 1 kΩ series resistors are optional. A bare
+  NEO-6M or a 5 V-logic breakout would not be safe.
+- **H6 — closed.** The GY-521 supplies the I2C pull-ups and pulls AD0 low (address 0x68); INT is unused.
+  The `GPIO_8`/`GPIO_9` "stubs" are really IO3/IO4, not strapping pins. J6 is mechanical only.
+
+### New, found in this pass
+
+- **Which MicroSD breakout?** J4 feeds it `+3V3`. The common 6-pin module with an AMS1117 regulator and
+  a 74LVC125 level shifter wants 5 V on VCC; at 3.3 V in, the card gets roughly 2.2–2.5 V and often
+  fails to mount. If yours has a 3-pin SOT-223 regulator on it, bridge that regulator's input to its
+  output, or feed J4.2 from `+5V` instead. A breakout without a regulator is fine as wired.
+- **The onboard LED is gone.** GPIO8 is a GPS UART line on this board, so the carrier firmware never
+  drives it. The LED will flicker once a second if the GPS happens to transmit on that pin.
+- **Flash with SW1 off.** USB then powers the module and GPS through the module's 5V pin without
+  back-feeding the battery shield's boost output.
+
+---
 
 ## Bill of materials
 
@@ -131,24 +131,25 @@ Derived from the footprints in `bikesensor_pcb.kicad_pcb`, not from memory.
 
 | Qty | Ref | Part | Footprint / note |
 | --- | --- | --- | --- |
-| 1 | — | ESP32-C3 SuperMini | seats across J1/J2, rows 15.24 mm (600 mil) apart |
+| 1 | — | ESP32-C3 SuperMini | seats across J1/J2, rows 15.24 mm (600 mil) apart, **5V pin in J1.1** |
 | 1 | — | GY-521 (MPU-6050) | J3. **Supplies the I2C pull-ups** — the carrier has none |
 | 1 | — | GY-NEO6MV2 GPS | J5. Must have its own regulator and 3.3 V logic; it is fed from 5 V with no level shifting |
-| 1 | — | MicroSD SPI breakout | J4 |
+| 1 | — | MicroSD SPI breakout | J4. Fed 3.3 V — see "Which MicroSD breakout?" above |
 | 1 | — | Wemos D1 Mini TP5400 battery shield + LiPo | J6/J7/J8, rows 22.86 mm (900 mil) apart |
-| 5 | J1 J2 J3 J6 J7 | 1x08 female header, 2.54 mm | J6 is 8 electrically dead pins; it only holds the shield level |
+| 5 | J1 J2 J3 J6 J7 | 1x08 female header, 2.54 mm | **J2: clip leg 5** (the bodge). J6 is 8 electrically dead pins |
 | 1 | J4 | 1x06 female header, 2.54 mm | |
 | 1 | J5 | 1x04 female header, 2.54 mm | |
 | 1 | J8 | 1x01 female header, 2.54 mm | VBAT sense |
 | 2 | R1 R2 | 100 kΩ axial | `R_Axial_DIN0207`, 7.62 mm pitch |
-| 1 | R3 | 10 kΩ axial | 7.62 mm pitch. CS pull-up; resolves **H2** |
-| 1 | C1 | 22–47 µF electrolytic | `CP_Radial_D5.0mm_P2.00mm`. 10 µF fits but is marginal — see **H4** |
+| 1 | R3 | 10 kΩ axial | 7.62 mm pitch. CS pull-up |
+| 1 | C1 | 47 µF electrolytic, ≥ 6.3 V | `CP_Radial_D5.0mm_P2.00mm`. 10 µF fits but is marginal — see **H4** |
 | 2 | C2 C3 | 100 nF ceramic disc | `C_Disc_D5.0mm`, 5.00 mm pitch |
 | 1 | SW1 | **C&K OS102011MS2Q** | See below — not a generic part |
+| — | — | ~3 cm hookup wire | The J2.5 → J1.5 bodge |
 | 2 | — | 1 kΩ axial *(optional)* | Series resistors on the GPS UART, **H5**. No footprint; fit inline on the wires |
 
-**Use sockets, not direct soldering.** Being able to unseat the ESP32 is what allowed the previous
-board's fault to be localised in software when no multimeter was available.
+**Use sockets, not direct soldering.** Being able to unseat the ESP32 is what allowed the prototype's
+fault to be localised in software when no multimeter was available.
 
 ### SW1 is not substitutable
 
@@ -170,20 +171,10 @@ most prototype fabs. Upload `production/bikesensor.zip`.
 
 ## Before the respin
 
-Build a real ESP32-C3 SuperMini schematic symbol with named pins, re-derive the netlist, and diff it
-against the firmware constants. Signal names are now on the silkscreen (done 2026-09-17). Once the
-symbol is real, this file becomes unnecessary, which is the point.
+Replace the two generic sockets with a real SuperMini symbol and footprint (the mrtnvgr library above
+has both), re-derive the netlist, and diff it against the firmware constants. Keeping the carrier
+firmware map avoids re-routing most nets; the minimum respin change is moving `BATTERY_ADC` from
+J2.5 (IO9) to J1.5 or J1.4 (IO3/IO4) and putting the divider downstream of SW1 (H3). Once the symbol
+is real, this file becomes unnecessary, which is the point.
 
-**Both pre-fabrication blockers are now closed (2026-09-17):**
-
-1. ~~`+3V3` does not reach C1 pin 1.~~ Routed. The bulk capacitor is connected.
-2. ~~R3, the CS pull-up (H2), is not in the design.~~ Added: 10 kΩ from `/SPI_CS` to `+3V3`,
-   which resolves **H2**.
-
-`production/` was re-plotted and `bikesensor.zip` rebuilt from it — verified to contain the
-38.74 × 114.47 mm outline. KiCad DRC reports 0 errors and 0 unconnected pads.
-
-**H3, H4, H5 and H6 are still open** and were never design changes, only cautions:
-H3 (divider upstream of the switch) and H5 (no series resistors on the GPS UART) are unchanged in
-this revision. H4 is partly mitigated — C1 is now actually connected, but it is still 10 µF, not the
-22–47 µF recommended above.
+Closed on 2026-09-17: `+3V3` now reaches C1 pin 1, and R3 is in the design.
