@@ -31,7 +31,7 @@ Below is the completed physical system mounted on a custom 3D-printed handlebar 
 flowchart TD
     subgraph Riding [1. Outdoor Bike Ride]
         ESP[ESP32-C3 SuperMini]
-        IMU[MPU-6050 Accelerometer 100Hz] --> ESP
+        IMU[MPU-6050 Accelerometer 200Hz] --> ESP
         GPS[NEO-6M GPS Module 1Hz] --> ESP
         ESP -->|Log unified CSV| SD[(SPI MicroSD Card)]
     end

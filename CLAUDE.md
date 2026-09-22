@@ -34,13 +34,7 @@ Upload: `POST` with `Content-Type: text/csv`, `Authorization: Bearer <DEVICE_TOK
 
 ## Hardware
 
-`custom_pcb/` is a passive carrier board. Two facts that are not visible in the files:
-
-- **`production/` is stale.** Those gerbers are the pre-2026-09-17 board (72.75 × 167.43 mm). The
-  current `.kicad_pcb` is 38.74 × 114.47 mm with different footprint spacing. Re-plot before ordering.
-- **Two known open issues** are listed at the bottom of `custom_pcb/PIN_VERIFICATION.md`: `+3V3`
-  does not reach C1 pin 1, and the CS pull-up (R3) is not in the design. Read that file before
-  touching the board.
+`custom_pcb/` is a passive carrier board, 38.74 × 114.47 mm. `production/bikesensor.zip` was re-plotted from the current `.kicad_pcb` on 2026-09-17, after the two pre-fabrication blockers (`+3V3` to C1, the R3 CS pull-up) were fixed. Cautions H3–H6 are still open and the header-pin-to-GPIO mapping is still unverified on real hardware: read `custom_pcb/PIN_VERIFICATION.md` before touching the board.
 
 KiCad is not installed on this machine, so DRC cannot be run here. Connectivity can still be checked
 by parsing the `.kicad_pcb` directly — the netlist is authoritative, the schematic's generic
