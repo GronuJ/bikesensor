@@ -10,7 +10,7 @@ When you ride, the device autonomously records high-frequency (200 Hz) vertical 
 
 ## ⚠️ Project status
 
-* **The custom PCB has been re-laid-out** to 38.74 × 114.47 mm and re-plotted. `production/bikesensor.zip` matches the current design and passes DRC with zero errors and zero unconnected pads. It has **not been fabricated or assembled yet**, so nothing about it is bench-proven — the header-pin-to-GPIO mapping in particular is still unverified, see `custom_pcb/PIN_VERIFICATION.md`.
+* **The custom PCB has been ordered** (38.74 × 114.47 mm, `production/bikesensor.zip`) but not assembled. Its ESP32 headers were routed against the wrong SuperMini pinout, so every signal lands on a different GPIO than the hand-wired prototype used. The default firmware build is remapped to match the board; the battery sense needs one bodge wire during assembly. Details in `custom_pcb/PIN_VERIFICATION.md`.
 * **The hardware has never produced a real ride.** Every figure produced so far comes from synthetic signals.
 
 ---
@@ -57,7 +57,7 @@ Here is the physical wiring diagram for our custom carrier board:
 
 ### Schematic
 
-R3 (10 kΩ) pulls `SPI_CS` to `+3V3`. GPIO2 is an ESP32-C3 strapping pin and must be high or floating at reset; many MicroSD modules hold CS low at power-up, which can stop the chip booting.
+R3 (10 kΩ) pulls `SPI_CS` to `+3V3`, keeping the card deselected while the ESP32 boots. The schematic's ESP32 connectors are generic sockets, so it does not show which GPIO each net reaches; the table below does.
 
 ![Schematic](assets/schematic.png)
 
@@ -69,24 +69,25 @@ The carrier is 38.74 × 114.47 mm, 2-layer, all through-hole. Every connected pi
 
 ### Pin Map Table:
 
+GPIOs are for the carrier PCB (default firmware build). The hand-wired prototype used different ones — `pio run -d firmware -e handwired`.
+
 | Peripheral | Connection | Pin | Notes |
 | :--- | :--- | :--- | :--- |
-| **MPU-6050 (I2C)** | SDA | **GPIO 6** | Shared I2C Bus |
-| | SCL | **GPIO 7** | Shared I2C Bus |
+| **MPU-6050 (I2C)** | SDA | **GPIO 1** | J1.7, shared I2C bus |
+| | SCL | **GPIO 2** | J1.6. Strapping pin, held high by the GY-521's pull-ups |
 | | VCC / GND | **3V3 / GND** | Powered by system 3.3V rail |
-| **MicroSD (SPI)** | CS | **GPIO 2** | Chip Select |
-| | MOSI | **GPIO 3** | SPI Master Out |
-| | SCK | **GPIO 4** | SPI Clock |
-| | MISO | **GPIO 5** | SPI Master In |
+| **MicroSD (SPI)** | CS | **GPIO 7** | J2.3, R3 pull-up |
+| | MOSI | **GPIO 6** | J2.2 |
+| | SCK | **GPIO 5** | J2.1 |
+| | MISO | **GPIO 0** | J1.8 |
 | | VCC / GND | **3V3 / GND** | Powered by system 3.3V rail |
-| **NEO-6M (UART1)** | TX | **GPIO 10** | Connects to ESP32 RX |
-| | RX | **GPIO 1** | Connects to ESP32 TX |
+| **NEO-6M (UART1)** | TX / RX | **GPIO 8 / GPIO 21** | J2.4 / J2.8. Firmware detects which one the GPS transmits on |
 | | VCC / GND | **5V / GND** | Powered by 5V boost output |
 | **Wemos Battery Shield** | 5V Out | **J7 Pin 8** | Boosted 5.0V output |
 | | GND | **J7 Pin 7** | System Ground |
 | **SPDT Slide Switch (SW1)** | In / Out | **In Series** | Connected between `J7 Pin 8` (5V out) and `5V` net (ESP32 5V pin). Completely cuts off system power while preserving USB charging. |
-| **Voltage Divider (R1, R2, C3)** | Junction | **GPIO 0** | **R1 (100kΩ)** and **R2 (100kΩ)** divide raw battery voltage in half (`4.2V -> 2.1V`) for safe ADC reading. **C3 (100nF)** in parallel with R2 filters noise. |
-| **Decoupling Caps (C1, C2)** | Parallel | **3V3 / GND** | **C1 (10µF radial)** and **C2 (100nF ceramic)** placed in parallel next to the MicroSD socket prevent write-cycle voltage sags. |
+| **Voltage Divider (R1, R2, C3)** | Junction | **GPIO 3** | Routed to J2.5 = GPIO 9, which has no ADC; reaches GPIO 3 only via the bodge wire in `PIN_VERIFICATION.md`. **R1 (100kΩ)** and **R2 (100kΩ)** divide raw battery voltage in half (`4.2V -> 2.1V`) for safe ADC reading. **C3 (100nF)** in parallel with R2 filters noise. |
+| **Decoupling Caps (C1, C2)** | Parallel | **3V3 / GND** | **C1 (47µF radial; 10µF fits but is marginal)** and **C2 (100nF ceramic)** placed in parallel next to the MicroSD socket prevent write-cycle voltage sags. |
 
 ---
 
@@ -128,7 +129,7 @@ millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time
 *   `millis`: Relative milliseconds from ESP32 boot (used to align high-frequency vibration data).
 *   `ax,ay,az`: Raw vertical/lateral/longitudinal accelerometer values (the ±4 g scale, `1/8192`, is applied on the website, not on the device).
 *   `lat,lon,ele,speed_kmh`: GPS coordinate details.
-*   `battery_pct`: Divided battery measurement (`0 - 100%`) read from `GPIO 0`.
+*   `battery_pct`: Divided battery measurement (`0 - 100%`) read from `GPIO 3` on the carrier PCB (`GPIO 0` on the hand-wired prototype).
 *   `gps_time`: GPS UTC timestamp (used as a clock reference).
 
 ### 4.2 Wireless Sync Protocol

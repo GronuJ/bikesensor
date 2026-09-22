@@ -24,9 +24,10 @@ void setup(){ Serial.begin(115200); delay(1500); }
 void loop(){
   Serial.println("\n\n#### SD CHECK ####");
   Serial.println("Cheap modules and long hand-wiring often need a slower clock.\n");
-  tryMount(4,5,3,2, 400000);     // as wired per the README, slow
-  tryMount(4,5,3,2, 1000000);
-  tryMount(4,5,3,2, 4000000);
+  // Carrier PCB: SCK=5 MISO=0 MOSI=6 CS=7. The hand-wired prototype used 4,5,3,2.
+  tryMount(5,0,6,7, 400000);
+  tryMount(5,0,6,7, 1000000);
+  tryMount(5,0,6,7, 4000000);
   Serial.println("\n#### END ####");
   delay(12000);
 }

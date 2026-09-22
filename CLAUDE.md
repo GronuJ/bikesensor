@@ -18,7 +18,7 @@ pio run -d firmware -t upload    # flash
 pio device monitor -b 115200     # serial console (native USB-CDC)
 ```
 
-`platformio.ini` sets `src_dir = bikesensor` so the `.ino` compiles in place. `firmware/diagnostic/diagnostic.ino` is a separate standalone bring-up sketch — it is *not* in the PlatformIO build; swap `src_dir` to compile it. It currently only walks the SD card through 400 kHz / 1 MHz / 4 MHz. Earlier revisions probed I2C and discriminated a stuck bus from a solder short; recover them from git history (`1953733` and its parents) if a future build misbehaves.
+`platformio.ini` sets `src_dir = bikesensor` so the `.ino` compiles in place. The default env uses the carrier PCB's pin map; `-e handwired` (`-DBIKESENSOR_HANDWIRED`) builds the original prototype's map. The two differ on every signal — see the PIN MAP block in `bikesensor.ino`. `firmware/diagnostic/diagnostic.ino` is a separate standalone bring-up sketch — it is *not* in the PlatformIO build; swap `src_dir` to compile it. It currently only walks the SD card through 400 kHz / 1 MHz / 4 MHz on the carrier's SPI pins. Earlier revisions probed I2C and discriminated a stuck bus from a solder short; recover them from git history (`1953733` and its parents) if a future build misbehaves.
 
 ## Firmware ↔ kiel.earth contract
 
@@ -34,7 +34,9 @@ Upload: `POST` with `Content-Type: text/csv`, `Authorization: Bearer <DEVICE_TOK
 
 ## Hardware
 
-`custom_pcb/` is a passive carrier board, 38.74 × 114.47 mm. `production/bikesensor.zip` was re-plotted from the current `.kicad_pcb` on 2026-09-17, after the two pre-fabrication blockers (`+3V3` to C1, the R3 CS pull-up) were fixed. Cautions H3–H6 are still open and the header-pin-to-GPIO mapping is still unverified on real hardware: read `custom_pcb/PIN_VERIFICATION.md` before touching the board.
+`custom_pcb/` is a passive carrier board, 38.74 × 114.47 mm. `production/bikesensor.zip` was re-plotted from the current `.kicad_pcb` on 2026-09-17 and is what was ordered on 2026-09-22, so any change to the `.kicad_pcb` now means a respin.
+
+**J1/J2 were routed against a SuperMini pinout that does not exist.** The real module pinout is in `custom_pcb/PIN_VERIFICATION.md`. Firmware absorbs the SPI/I2C/UART mismatch, but `BATTERY_ADC` lands on GPIO9 (no ADC, BOOT strap) and needs a bodge wire to GPIO3. The board's `GPIO_8`/`GPIO_9` net names are wrong (they are IO3/IO4). Read that file before touching the board.
 
 KiCad is not installed on this machine, so DRC cannot be run here. Connectivity can still be checked
 by parsing the `.kicad_pcb` directly — the netlist is authoritative, the schematic's generic
