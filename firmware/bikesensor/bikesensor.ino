@@ -486,7 +486,7 @@ void loop() {
     return;
   }
 
-  // 4. Strict 100Hz periodic sampling with phase-drift correction
+  // 4. Strict SAMPLE_RATE_HZ periodic sampling with phase-drift correction
   static uint32_t lastSampleMs = 0;
   if (lastSampleMs == 0) {
     lastSampleMs = now;
