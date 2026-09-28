@@ -12,6 +12,11 @@
 //     NEO-6M (GPS):   UART on GPIO 10 / GPIO 1, direction detected at boot
 //     Battery:        GPIO 0
 //
+// Behaviour: at boot, and after every ride, it tries home Wi-Fi, uploads every
+// ride file on the SD card and switches Wi-Fi off again. A ride starts when the
+// bike has been moving for a few seconds and ends after three still minutes;
+// nothing is written while the bike is parked.
+//
 // Build: PlatformIO (firmware/platformio.ini).
 
 #include <Arduino.h>
@@ -100,12 +105,47 @@ static constexpr uint8_t MPU_ADDR = 0x68;
 // riding speed and no amount of processing recovers it. 200 Hz moves the limit
 // to 100 Hz and covers setts down to ~6 cm.
 static constexpr uint16_t SAMPLE_RATE_HZ = 200;
-static constexpr uint32_t SAMPLE_INTERVAL_MS = 1000 / SAMPLE_RATE_HZ;
+static constexpr uint32_t SAMPLE_INTERVAL_US = 1000000UL / SAMPLE_RATE_HZ;
+
+static const char CSV_HEADER[] = "millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time";
+
+// Ride detection. A ride starts after MOVE_START_S consecutive moving seconds
+// and ends after STILL_END_S consecutive still seconds; rides with fewer than
+// MIN_RIDE_MOVING_S moving seconds (wheeling the bike out of the hallway) are
+// deleted instead of uploaded. A second counts as moving when the accelerometer
+// is busy or the GPS says we are rolling.
+//
+// MOTION_THRESHOLD is PROVISIONAL, reasoned rather than measured: the metric is
+// the mean |sample-to-sample change| summed over the three axes, in raw counts.
+// MPU-6050 noise at the 94 Hz DLPF is ~4 mg rms per axis, which gives ~110 at
+// rest; smooth asphalt at 0.02 g rms gives several hundred. The serial console
+// prints the metric every 5 s — calibrate from a real ride.
+static constexpr uint32_t MOTION_THRESHOLD   = 300;
+static constexpr float    GPS_MOVING_KMH     = 8.0;
+static constexpr float    GPS_STILL_KMH      = 3.0;
+static constexpr uint16_t MOVE_START_S       = 3;
+static constexpr uint16_t STILL_END_S        = 180;  // longer than any red light
+static constexpr uint16_t MIN_RIDE_MOVING_S  = 60;
+
+// A position older than this is not written. TinyGPS++ keeps location.isValid()
+// true forever after the first fix and keeps committing the time without one, so
+// without an age check a lost fix repeats the last position with fresh times.
+static constexpr uint32_t FIX_MAX_AGE_MS = 1500;
+
+// The battery shield's divider halves the cell voltage. A reading outside
+// BATTERY_MIN_V..BATTERY_MAX_V is not a Li-ion cell — typically the carrier
+// without its GPIO9 -> GPIO3 bodge, where the ADC pin floats — so the column is
+// left empty rather than filled with a made-up percentage.
+static constexpr float BATTERY_DIVIDER = 2.0;
+static constexpr float BATTERY_MIN_V   = 2.8;
+static constexpr float BATTERY_MAX_V   = 4.5;
 
 // State Variables
 File logFile;
 char currentRideFilename[32];
 bool isLoggingActive = false;
+static bool sdReady = false;
+static bool imuReady = false;
 
 // GPS Object
 TinyGPSPlus gps;
@@ -156,12 +196,15 @@ static void gpsBegin() {
 }
 
 // ---------- BATTERY MEASUREMENT ----------
-static uint8_t getBatteryPercent() {
-  float mv = analogReadMilliVolts(PIN_BATTERY) * 2.0; 
-  float voltage = mv / 1000.0;
+// Returns -1 when the reading is not plausibly a cell (see BATTERY_MIN_V).
+static int getBatteryPercent() {
+  uint32_t mv = 0;
+  for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(PIN_BATTERY);
+  float voltage = (mv / 8.0) * BATTERY_DIVIDER / 1000.0;
+  if (voltage < BATTERY_MIN_V || voltage > BATTERY_MAX_V) return -1;
   if (voltage >= 4.2) return 100;
   if (voltage <= 3.3) return 0;
-  return (uint8_t)(((voltage - 3.3) / (4.2 - 3.3)) * 100.0); 
+  return (int)(((voltage - 3.3) / (4.2 - 3.3)) * 100.0);
 }
 
 // ---------- MPU-6050 ACCEL ONLY ----------
@@ -171,8 +214,11 @@ static void w8(uint8_t reg, uint8_t v) {
   Wire.endTransmission();
 }
 
-static void mpuInit() {
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
+// Probes and configures the IMU. Called at boot and again whenever it has gone
+// missing, so a loose header costs a gap in the data rather than the ride.
+static bool mpuInit() {
+  Wire.beginTransmission(MPU_ADDR);
+  if (Wire.endTransmission() != 0) return false;
   w8(0x6B, 0x80); delay(100); // Reset MPU-6050
   w8(0x6B, 0x01);             // Clock source PLL with X gyro
   w8(0x1A, 0x02);             // DLPF CONFIG: Accel BW = 94Hz — the anti-alias filter
@@ -181,29 +227,38 @@ static void mpuInit() {
                               // that cobblestone lives in.
   w8(0x1C, 0x08);             // ACCEL_CONFIG: Full scale range ±4 g
   Serial.println("MPU-6050 initialized.");
+  return true;
 }
 
-static void readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
+// False when the IMU did not answer; the caller must not use ax/ay/az then.
+static bool readAccel(int16_t &ax, int16_t &ay, int16_t &az) {
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x3B); // Accel data register 59
-  Wire.endTransmission(false);
-  Wire.requestFrom((int)MPU_ADDR, 6);
-  if (Wire.available() >= 6) {
-    ax = (Wire.read() << 8) | Wire.read();
-    ay = (Wire.read() << 8) | Wire.read();
-    az = (Wire.read() << 8) | Wire.read();
-  }
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((int)MPU_ADDR, 6) != 6 || Wire.available() < 6) return false;
+  ax = (Wire.read() << 8) | Wire.read();
+  ay = (Wire.read() << 8) | Wire.read();
+  az = (Wire.read() << 8) | Wire.read();
+  return true;
+}
+
+// ---------- MICROSD ----------
+static bool mountSd() {
+  if (!SD.begin(PIN_SPI_CS)) return false;
+  Serial.println("MicroSD card mounted successfully.");
+  return true;
 }
 
 static String getServerUrl() {
   return String("https://") + SERVER_HOST + SERVER_UPLOAD_PATH;
 }
 
-// The ride id is the SD filename without its extension. Deriving it from the
-// satellite clock at file creation makes it globally unique and, crucially,
-// stable across reboots — so if an upload response is lost, the retry carries
-// the same id and the server recognises the replay instead of storing the ride
-// twice. Falls back to a hardware random when there is no fix yet.
+// The ride id is the SD filename without its extension, fixed when the file is
+// created. Because it lives in the filename it is stable across reboots — so if
+// an upload response is lost, the retry carries the same id and the server
+// recognises the replay instead of storing the ride twice. Rides start on
+// motion, usually after the GPS has its clock, so the name is normally the start
+// time; without a GPS clock it falls back to a hardware random.
 static void makeRideFilename(char *out, size_t n) {
   if (gps.date.isValid() && gps.time.isValid() && gps.date.year() > 2020) {
     snprintf(out, n, "/r%02d%02d%02d_%02d%02d%02d.csv",
@@ -223,34 +278,7 @@ static String rideIdFromFilename(const String &filename) {
 }
 
 // ---------- WI-FI SYNC FUNCTION ----------
-bool attemptWiFiSync() {
-  Serial.print("Connecting to Wi-Fi: ");
-  Serial.println(WIFI_SSID);
-  
-  // Turn off Wi-Fi sleep mode to prevent connection timeouts during security handshake
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  // Wait up to 6 seconds for Wi-Fi connection with rapid visual LED feedback!
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 12) {
-    ledSet(true); // Turn LED ON
-    delay(100);
-    ledSet(false); // Turn LED OFF
-    delay(400);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWi-Fi connection failed. Starting standalone logging mode!");
-    ledSet(false); // Ensure LED is OFF
-    WiFi.disconnect(true);
-    return false;
-  }
-
-  Serial.println("\nConnected to home Wi-Fi!");
-  ledSet(true); // Turn LED solid ON to indicate active connected/syncing mode!
+static void uploadPendingRides() {
   Serial.println("Checking SD card for offline rides to sync...");
   const String serverUrl = getServerUrl();
   Serial.printf("Using upload endpoint: %s\n", serverUrl.c_str());
@@ -259,10 +287,10 @@ bool attemptWiFiSync() {
   File root = SD.open("/");
   if (!root) {
     Serial.println("Failed to open SD card root directory.");
-    return true;
+    return;
   }
 
-  // 1. Safe Collector Stage: Read filenames first to avoid modifying the directory 
+  // 1. Safe Collector Stage: Read filenames first to avoid modifying the directory
   // structure while iterating, which can corrupt index pointers in the SD library.
   std::vector<String> filesToSync;
   while (true) {
@@ -294,15 +322,16 @@ bool attemptWiFiSync() {
 
     size_t fileSize = entry.size();
     Serial.printf("Found unsynced ride: %s (%u bytes). Uploading...\n", filename.c_str(), fileSize);
-    
-    // Safety guard: If the file is completely empty, delete it and skip upload
-    if (entry.size() == 0) {
-      Serial.printf("File %s is empty (0 bytes). Skipping upload and deleting.\n", filename.c_str());
+
+    // Safety guard: a file holding at most the header has no ride in it
+    // (power cut right after it was created). Delete it and skip the upload.
+    if (fileSize <= sizeof(CSV_HEADER) + 1) {
+      Serial.printf("File %s has no data rows. Skipping upload and deleting.\n", filename.c_str());
       entry.close();
       SD.remove(path.c_str());
       continue;
     }
-    
+
     // A fresh TLS client per file. WiFiClientSecure is documented to leak memory
     // when certificate verification FAILS, so the retry path below must not spin
     // on a broken handshake — one attempt per file per sync, then move on.
@@ -319,7 +348,7 @@ bool attemptWiFiSync() {
 
     // Stream the file as the body; passing the size avoids chunked encoding,
     // which the ESP32 HTTP client handles poorly for large payloads.
-    int httpCode = http.sendRequest("POST", &entry, entry.size());
+    int httpCode = http.sendRequest("POST", &entry, fileSize);
 
     // Delete ONLY on an explicit 2xx. The server stores the raw bytes before it
     // acknowledges, so a 2xx means the ride is durable somewhere other than this
@@ -339,20 +368,53 @@ bool attemptWiFiSync() {
       entry.close();
     }
   }
-  
+
   Serial.println("Offline ride sync sequence completed.");
-  ledSet(false); // Turn LED OFF when sync is fully completed!
-  return true;
 }
 
-// ---------- STANDALONE LOGGING ----------
+// Runs at boot and after every ride. Wi-Fi is switched fully off before this
+// returns, whatever happened: left on, it drew ~80-100 mA for the whole ride and
+// its reconnect attempts competed with the sampling loop on the single core.
+void attemptWiFiSync() {
+  Serial.print("Connecting to Wi-Fi: ");
+  Serial.println(WIFI_SSID);
+
+  // Turn off Wi-Fi sleep mode to prevent connection timeouts during security handshake
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  // Wait up to 10 seconds for Wi-Fi connection with rapid visual LED feedback
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    ledSet(true); // Turn LED ON
+    delay(100);
+    ledSet(false); // Turn LED OFF
+    delay(400);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWi-Fi connection failed. Not at home; rides stay on the SD card.");
+  } else {
+    Serial.println("\nConnected to home Wi-Fi!");
+    ledSet(true); // Turn LED solid ON to indicate active connected/syncing mode!
+    uploadPendingRides();
+  }
+
+  ledSet(false);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("Wi-Fi off.");
+}
+
+// ---------- RIDE FILES ----------
 void startNewRideLogging() {
-  // Names used to be /ride_001.csv, restarting from 1 on every boot — so a new
-  // ride could silently overwrite an older, not-yet-uploaded one, and two rides
-  // from different boots could share an id. Derived from the satellite clock now.
   makeRideFilename(currentRideFilename, sizeof(currentRideFilename));
   if (SD.exists(currentRideFilename)) {
-    // Same second as an existing file (only reachable on a fast reboot): salt it.
+    // Same second as an existing file (a ride ending and restarting within a
+    // second, or two random names colliding): salt it.
     char salted[48];
     snprintf(salted, sizeof(salted), "/%.*s_%04x.csv",
              (int)(strlen(currentRideFilename) - 5), currentRideFilename + 1,
@@ -368,23 +430,28 @@ void startNewRideLogging() {
     return;
   }
 
-  // Write CSV headers (vibration + in-band GPS + battery + satellite clock columns!)
-  logFile.println("millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time");
-  logFile.close(); // Force directory entry size update!
-  
-  logFile = SD.open(currentRideFilename, FILE_APPEND);
-  if (!logFile) {
-    Serial.println("❌ ERROR: Failed to reopen ride file in append mode after header creation!");
-    return;
-  }
-  
+  logFile.println(CSV_HEADER);
+  logFile.flush();
+
   isLoggingActive = true;
   Serial.println("Ride logging active. Accelerometer and GPS recording started...");
 }
 
-// Latching GPS variables for race-free 1Hz satellite tracking
+static void endRideLogging(uint32_t movingSeconds) {
+  logFile.close();
+  isLoggingActive = false;
+  if (movingSeconds < MIN_RIDE_MOVING_S) {
+    SD.remove(currentRideFilename);
+    Serial.printf("Ride %s had only %u moving seconds; deleted.\n", currentRideFilename, movingSeconds);
+  } else {
+    Serial.printf("Ride %s ended after %u moving seconds.\n", currentRideFilename, movingSeconds);
+  }
+}
+
+// Latched once per GPS second, written with the next accelerometer row.
 static uint32_t lastGpsTimeVal = 0;
 static bool newGpsDataAvailable = false;
+static bool lastFixFresh = false;
 static double lastLat = 0.0;
 static double lastLon = 0.0;
 static double lastEle = 0.0;
@@ -400,185 +467,216 @@ void setup() {
   if (PIN_LED >= 0) pinMode(PIN_LED, OUTPUT);
   ledSet(false);
 
-  // Initialize custom SPI for MicroSD Module
+  // Nothing below hangs on missing hardware: a missing SD card or IMU is
+  // retried from loop(), so reseating it recovers without a power cycle.
   SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_CS);
-  if (!SD.begin(PIN_SPI_CS)) {
-    Serial.println("❌ ERROR: MicroSD card mounting failed! Check wiring.");
-    // Hardware Alert: Rapidly flash the LED (100ms ON / 100ms OFF) to signal SD card failure
-    while (1) {
-      ledSet(true); // ON
-      delay(100);
-      ledSet(false); // OFF
-      delay(100);
-    }
+  sdReady = mountSd();
+  if (!sdReady) {
+    Serial.println("❌ ERROR: MicroSD card mounting failed! Check the card; retrying every 5 s.");
+  } else {
+    attemptWiFiSync();
   }
-  Serial.println("MicroSD card mounted successfully.");
-
-  // Check if we can sync with home Wi-Fi and upload saved rides
-  bool synced = attemptWiFiSync();
 
   // Initialize NEO-6M GPS Module on UART1
   gpsBegin();
 
-  // Initialize I2C bus and MPU-6050
+  // A stuck bus must not stall the 5 ms loop for the core's 50 ms default.
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
-  
-  // Verify that the accelerometer responds over I2C before proceeding
-  Wire.beginTransmission(MPU_ADDR);
-  if (Wire.endTransmission() != 0) {
-    Serial.println("❌ ERROR: MPU-6050 not responding at I2C address 0x68!");
-    // Hardware Alert: Double-flash LED rapidly (80ms ON / 80ms OFF) to signal IMU failure
-    while (1) {
-      ledSet(true); // ON
-      delay(80);
-      ledSet(false); // OFF
-      delay(80);
-    }
+  Wire.setTimeOut(10);
+  imuReady = mpuInit();
+  if (!imuReady) {
+    Serial.println("❌ ERROR: MPU-6050 not responding at I2C address 0x68! Retrying every second.");
   }
-
-  w8(0x6B, 0x80); delay(100); // Reset MPU-6050
-  w8(0x6B, 0x01);             // Clock source PLL with X gyro
-  w8(0x1A, 0x02);             // DLPF CONFIG: Accel BW = 94Hz — the anti-alias filter
-                              // must sit just under Nyquist (100Hz at 200Hz sampling).
-                              // Leaving this at 44Hz would throw away exactly the band
-                              // that cobblestone lives in.
-  w8(0x1C, 0x08);             // ACCEL_CONFIG: Full scale range ±4 g
-  Serial.println("MPU-6050 initialized.");
-
-  startNewRideLogging();
 }
 
 void loop() {
-  static bool gpsLockSignal = false;
   uint32_t now = millis();
+  uint32_t nowUs = micros();
 
   // 1. Process the incoming NMEA stream from the GPS module continuously
   while (GPSSerial.available() > 0) {
     gps.encode(GPSSerial.read());
   }
 
-  // 2. Check for a new GPS clock second tick. This is race-free, timing-insensitive,
-  // and completely bypasses any TinyGPS++ isUpdated() race conditions.
-  if (gps.location.isValid() && gps.date.isValid() && gps.time.isValid()) {
+  // 2. Latch once per GPS clock second. The time keeps ticking without a fix, so
+  // the row still carries the battery and gps_time; the position fields are
+  // written only when the fix is current.
+  if (gps.time.isValid()) {
     uint32_t currentGpsTimeVal = gps.time.value(); // Format: HHMMSSCC
     if (currentGpsTimeVal != lastGpsTimeVal) {
       lastGpsTimeVal = currentGpsTimeVal;
       newGpsDataAvailable = true;
+      lastFixFresh = gps.location.isValid() && gps.location.age() < FIX_MAX_AGE_MS;
       lastLat = gps.location.lat();
       lastLon = gps.location.lng();
       lastEle = gps.altitude.meters();
       lastSpeed = gps.speed.kmph();
-      snprintf(lastGpsTime, sizeof(lastGpsTime), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-               gps.date.year(), gps.date.month(), gps.date.day(),
-               gps.time.hour(), gps.time.minute(), gps.time.second());
-    }
-  }
-
-  // 3. Periodic battery diagnostic print (every 5 seconds) to Serial console
-  static uint32_t lastBattPrintMs = 0;
-  if (now - lastBattPrintMs > 5000) {
-    lastBattPrintMs = now;
-    Serial.printf("[DIAGNOSTIC] Battery ADC: %d mV | Calculated: %u%%\n", analogReadMilliVolts(PIN_BATTERY), getBatteryPercent());
-  }
-
-  if (!isLoggingActive) {
-    delay(1);
-    return;
-  }
-
-  // 4. Strict SAMPLE_RATE_HZ periodic sampling with phase-drift correction
-  static uint32_t lastSampleMs = 0;
-  if (lastSampleMs == 0) {
-    lastSampleMs = now;
-  }
-
-  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
-    // Phase handling. The old version added one interval whenever it was behind,
-    // which meant that after an SD stall several loop iterations fired in quick
-    // succession — samples taken 1-2 ms apart but spaced as if they were regular.
-    // That silently violates the uniform-rate assumption the whole FFT pipeline
-    // rests on, and it is invisible in the data.
-    //
-    // Now: if more than one slot was missed, give up on catching up and resync
-    // the phase. That turns a stall into a clean gap in the millis column, which
-    // the DSP detects and splits the ride on, instead of into bunched samples it
-    // cannot detect at all.
-    if (now - lastSampleMs >= 2 * SAMPLE_INTERVAL_MS) {
-      lastSampleMs = now;
-    } else {
-      lastSampleMs += SAMPLE_INTERVAL_MS;
-    }
-    
-    int16_t ax, ay, az;
-    readAccel(ax, ay, az);
-
-    // Format and write the data row directly as CSV
-    if (newGpsDataAvailable) {
-      newGpsDataAvailable = false; // Reset the latch
-      uint8_t batt = getBatteryPercent(); // Live analog battery level
-      
-      logFile.printf("%lu,%d,%d,%d,%.6f,%.6f,%.1f,%.2f,%u,%s\n", now, ax, ay, az, lastLat, lastLon, lastEle, lastSpeed, batt, lastGpsTime);
-      
-      // Trigger non-blocking double-blink signal to indicate satellite lock
-      gpsLockSignal = true;
-    } else {
-      // Print empty commas for GPS, battery, and clock columns when there is no new coordinate fix
-      logFile.printf("%lu,%d,%d,%d,,,,,,\n", now, ax, ay, az);
-    }
-
-    // Periodic close and reopen (syncing FAT directory entry file size) to prevent data loss in case of sudden power cutoff
-    static uint32_t lastFlushMs = 0;
-    if (now - lastFlushMs > 5000) {
-      logFile.close();
-      logFile = SD.open(currentRideFilename, FILE_APPEND);
-      if (!logFile) {
-        Serial.println("❌ ERROR: Failed to reopen ride file in append mode!");
+      if (gps.date.isValid() && gps.date.year() > 2020) {
+        snprintf(lastGpsTime, sizeof(lastGpsTime), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                 gps.date.year(), gps.date.month(), gps.date.day(),
+                 gps.time.hour(), gps.time.minute(), gps.time.second());
+      } else {
+        lastGpsTime[0] = '\0';
       }
+    }
+  }
+
+  // 3. Missing hardware is retried rather than fatal.
+  static uint32_t lastSdRetryMs = 0;
+  if (!sdReady && now - lastSdRetryMs > 5000) {
+    lastSdRetryMs = now;
+    SD.end();
+    sdReady = mountSd();
+  }
+  static uint32_t lastImuRetryMs = 0;
+  if (!imuReady && now - lastImuRetryMs > 1000) {
+    lastImuRetryMs = now;
+    imuReady = mpuInit();
+  }
+
+  // 4. Strict SAMPLE_RATE_HZ sampling, scheduled in microseconds so millis()'s
+  // 1 ms steps do not add jitter. A late sample is caught up only if it is less
+  // than half a period late. Anything later resyncs the phase, which turns a
+  // stall into a clean gap in the millis column that the DSP splits on, instead
+  // of two samples bunched a millisecond or two apart that it cannot detect.
+  static uint32_t nextSampleUs = 0;
+  static bool scheduled = false;
+  if (!scheduled) { nextSampleUs = nowUs; scheduled = true; }
+
+  // Ride detection accumulators, evaluated once a second.
+  static uint32_t motionSum = 0, motionCount = 0;
+  static int16_t pax = 0, pay = 0, paz = 0;
+  static bool havePrev = false;
+  static uint32_t lastMotionMetric = 0;
+  static uint16_t movingStreak = 0, stillStreak = 0;
+  static uint32_t rideMovingSeconds = 0;
+  static uint32_t imuFailStreak = 0;
+  static uint32_t writeFailStreak = 0;
+
+  if ((int32_t)(nowUs - nextSampleUs) >= 0) {
+    if (nowUs - nextSampleUs > SAMPLE_INTERVAL_US / 2) {
+      nextSampleUs = nowUs + SAMPLE_INTERVAL_US;
+    } else {
+      nextSampleUs += SAMPLE_INTERVAL_US;
+    }
+
+    int16_t ax = 0, ay = 0, az = 0;
+    bool accelOk = imuReady && readAccel(ax, ay, az);
+    if (accelOk) {
+      imuFailStreak = 0;
+      if (havePrev) {
+        motionSum += abs(ax - pax) + abs(ay - pay) + abs(az - paz);
+        motionCount++;
+      }
+      pax = ax; pay = ay; paz = az; havePrev = true;
+    } else if (imuReady && ++imuFailStreak >= SAMPLE_RATE_HZ) {
+      // A whole second of failed reads: treat the IMU as gone and re-probe it.
+      Serial.println("❌ MPU-6050 stopped answering; re-probing every second.");
+      imuReady = false;
+      havePrev = false;
+    }
+
+    if (isLoggingActive &&
+        (accelOk || (newGpsDataAvailable && (lastFixFresh || lastGpsTime[0])))) {
+      // A failed accelerometer read writes no 200 Hz row (a gap the DSP splits
+      // on), but a GPS-second row is still written with ax/ay/az left empty.
+      char row[160];
+      int n = snprintf(row, sizeof(row), "%lu,", (unsigned long)now);
+      if (accelOk) n += snprintf(row + n, sizeof(row) - n, "%d,%d,%d", ax, ay, az);
+      else         n += snprintf(row + n, sizeof(row) - n, ",,");
+      if (newGpsDataAvailable) {
+        int batt = getBatteryPercent();
+        char battStr[8] = "";
+        if (batt >= 0) snprintf(battStr, sizeof(battStr), "%d", batt);
+        if (lastFixFresh) {
+          n += snprintf(row + n, sizeof(row) - n, ",%.6f,%.6f,%.1f,%.2f,%s,%s\n",
+                        lastLat, lastLon, lastEle, lastSpeed, battStr, lastGpsTime);
+        } else {
+          n += snprintf(row + n, sizeof(row) - n, ",,,,,%s,%s\n", battStr, lastGpsTime);
+        }
+      } else {
+        n += snprintf(row + n, sizeof(row) - n, ",,,,,,\n");
+      }
+      if (logFile.write((const uint8_t *)row, n) == (size_t)n) {
+        writeFailStreak = 0;
+      } else if (++writeFailStreak >= SAMPLE_RATE_HZ) {
+        // A second of failed writes: the card is gone. Keep what was written.
+        Serial.println("❌ Writes to the SD card are failing; ending the ride and remounting.");
+        logFile.close();
+        isLoggingActive = false;
+        sdReady = false;
+        writeFailStreak = 0;
+      }
+    }
+    newGpsDataAvailable = false;
+
+    // Put what is written on the card every 5 s. flush() writes the buffer and
+    // syncs the FAT size (fsync), so a power cut loses at most 5 s. It replaces a
+    // close/reopen, which also rewrote the directory entry and took longer.
+    static uint32_t lastFlushMs = 0;
+    if (isLoggingActive && now - lastFlushMs > 5000) {
+      logFile.flush();
       lastFlushMs = now;
     }
   }
 
-  // 5. Visual LED Indicator system on the onboard LED (2-Second Heartbeat vs. Rapid GPS Lock Double-Blink)
-  static uint32_t lastLEDMs = 0;
-  static int blinkPhase = 0; // 0 = idle, 1 = first blink on, 2 = first blink off, 3 = second blink on
-  
-  if (isLoggingActive) {
-    if (gpsLockSignal) {
-      gpsLockSignal = false;
-      blinkPhase = 1;
-      lastLEDMs = now;
-      ledSet(true); // Start first flash of GPS lock double-blink
-    }
-    
-    if (blinkPhase > 0) {
-      // Non-blocking double-blink animation for GPS lock:
-      // Phase 1 (ON): 15ms -> Phase 2 (OFF): 80ms -> Phase 3 (ON): 15ms -> Phase 0 (Idle)
-      if (blinkPhase == 1 && now - lastLEDMs > 15) {
-        ledSet(false); // OFF
-        blinkPhase = 2;
-        lastLEDMs = now;
-      } else if (blinkPhase == 2 && now - lastLEDMs > 80) {
-        ledSet(true); // ON
-        blinkPhase = 3;
-        lastLEDMs = now;
-      } else if (blinkPhase == 3 && now - lastLEDMs > 15) {
-        ledSet(false); // OFF
-        blinkPhase = 0;        // Animation complete
+  // 5. Once a second: is the bike moving? Start or end the ride.
+  static uint32_t lastMotionEvalMs = 0;
+  if (now - lastMotionEvalMs >= 1000) {
+    lastMotionEvalMs = now;
+    lastMotionMetric = motionCount ? motionSum / motionCount : 0;
+    motionSum = 0; motionCount = 0;
+
+    bool gpsFresh = gps.location.isValid() && gps.location.age() < FIX_MAX_AGE_MS &&
+                    gps.speed.isValid() && gps.speed.age() < FIX_MAX_AGE_MS;
+    float speed = gpsFresh ? gps.speed.kmph() : 0.0;
+    bool moving = lastMotionMetric > MOTION_THRESHOLD || speed >= GPS_MOVING_KMH;
+    bool still  = lastMotionMetric <= MOTION_THRESHOLD && speed < GPS_STILL_KMH;
+
+    if (!isLoggingActive) {
+      movingStreak = moving ? movingStreak + 1 : 0;
+      if (movingStreak >= MOVE_START_S && sdReady) {
+        movingStreak = 0; stillStreak = 0; rideMovingSeconds = 0;
+        startNewRideLogging();
       }
     } else {
-      // Idle phase: Slow steady 2-second heartbeat logging blink (short 15ms pulse)
-      static uint32_t lastHeartbeatMs = 0;
-      static bool ledHeartbeatState = false;
-      if (now - lastHeartbeatMs > 2000) {
-        ledSet(true); // ON
-        lastHeartbeatMs = now;
-        ledHeartbeatState = true;
-      }
-      if (ledHeartbeatState && now - lastHeartbeatMs > 15) {
-        ledSet(false); // OFF
-        ledHeartbeatState = false;
+      if (moving) rideMovingSeconds++;
+      stillStreak = still ? stillStreak + 1 : 0;
+      if (stillStreak >= STILL_END_S) {
+        stillStreak = 0;
+        endRideLogging(rideMovingSeconds);
+        // Parked: if this is home, upload now rather than at the next power-on.
+        attemptWiFiSync();
+        nextSampleUs = micros();
+        havePrev = false;
+        lastMotionEvalMs = millis();
       }
     }
+  }
+
+  // 6. Periodic diagnostic print (every 5 seconds) to Serial console
+  static uint32_t lastDiagPrintMs = 0;
+  if (now - lastDiagPrintMs > 5000) {
+    lastDiagPrintMs = now;
+    Serial.printf("[DIAGNOSTIC] %s | motion %lu (threshold %lu) | GPS %s | battery ADC %d mV = %d%% | SD %s | IMU %s\n",
+                  isLoggingActive ? "RIDING" : "idle",
+                  (unsigned long)lastMotionMetric, (unsigned long)MOTION_THRESHOLD,
+                  gps.location.isValid() && gps.location.age() < FIX_MAX_AGE_MS ? "fix" : "no fix",
+                  analogReadMilliVolts(PIN_BATTERY), getBatteryPercent(),
+                  sdReady ? "ok" : "MISSING", imuReady ? "ok" : "MISSING");
+  }
+
+  // 7. Onboard LED (prototype only; the carrier has none): fast blink while the
+  // SD card or IMU is missing, a short pulse every 2 s while recording.
+  static uint32_t lastLEDMs = 0;
+  static bool ledOn = false;
+  if (!sdReady || !imuReady) {
+    if (now - lastLEDMs > 100) { ledOn = !ledOn; ledSet(ledOn); lastLEDMs = now; }
+  } else if (isLoggingActive) {
+    if (!ledOn && now - lastLEDMs > 2000) { ledSet(true); ledOn = true; lastLEDMs = now; }
+    else if (ledOn && now - lastLEDMs > 15) { ledSet(false); ledOn = false; }
+  } else if (ledOn) {
+    ledSet(false); ledOn = false;
   }
 
   delay(1); // keeps loop snappy

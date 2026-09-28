@@ -28,7 +28,7 @@ The on-SD CSV format is the contract with the website:
 millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time
 ```
 
-`millis` is relative to ESP32 boot; GPS columns are only populated on ~1 Hz fix rows. `ax/ay/az` are **raw MPU-6050 counts** — the ±4 g scale (`1/8192`) is applied downstream, not on-device, so changing the firmware's `ACCEL_CONFIG` register means changing the scale in `kiel-earth` too.
+`millis` is relative to ESP32 boot. Most rows are 200 Hz accel only, with the last six fields empty. Once per GPS second a row also carries `battery_pct` and `gps_time`; `lat,lon,ele,speed_kmh` are filled only while the fix is current (under 1.5 s old) and are empty otherwise, never repeated. `battery_pct` is empty when the reading is not a plausible cell (the carrier without its bodge wire). `gps_time` is empty until the GPS has a date. If the IMU fails a read, no 200 Hz row is written (a gap in `millis`), and a GPS-second row is written with `ax,ay,az` empty. A file is one ride: it starts after a few seconds of motion and ends after three still minutes, so it may end with up to three minutes of standing data; rides under a minute of motion are deleted on the device. `ax/ay/az` are **raw MPU-6050 counts** — the ±4 g scale (`1/8192`) is applied downstream, not on-device, so changing the firmware's `ACCEL_CONFIG` register means changing the scale in `kiel-earth` too.
 
 Upload: `POST` with `Content-Type: text/csv`, `Authorization: Bearer <DEVICE_TOKEN>` and `X-Ride-Id` (the filename without extension). The firmware deletes a file from the SD card only on a 2xx, so the server must store the raw bytes before acknowledging, and must treat a repeated `X-Ride-Id` as a duplicate rather than a new ride.
 
