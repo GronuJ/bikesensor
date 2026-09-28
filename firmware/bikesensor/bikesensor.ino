@@ -658,11 +658,16 @@ void loop() {
   static uint32_t lastDiagPrintMs = 0;
   if (now - lastDiagPrintMs > 5000) {
     lastDiagPrintMs = now;
-    Serial.printf("[DIAGNOSTIC] %s | motion %lu (threshold %lu) | GPS %s | battery ADC %d mV = %d%% | SD %s | IMU %s\n",
+    // -1 means "not a plausible cell" (no battery, or no bodge wire): the CSV
+    // leaves the field empty, so the console says so instead of printing -1%.
+    int batt = getBatteryPercent();
+    char battStr[16] = "no battery";
+    if (batt >= 0) snprintf(battStr, sizeof(battStr), "%d%%", batt);
+    Serial.printf("[DIAGNOSTIC] %s | motion %lu (threshold %lu) | GPS %s | battery ADC %d mV = %s | SD %s | IMU %s\n",
                   isLoggingActive ? "RIDING" : "idle",
                   (unsigned long)lastMotionMetric, (unsigned long)MOTION_THRESHOLD,
                   gps.location.isValid() && gps.location.age() < FIX_MAX_AGE_MS ? "fix" : "no fix",
-                  analogReadMilliVolts(PIN_BATTERY), getBatteryPercent(),
+                  analogReadMilliVolts(PIN_BATTERY), battStr,
                   sdReady ? "ok" : "MISSING", imuReady ? "ok" : "MISSING");
   }
 
