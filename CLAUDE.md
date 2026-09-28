@@ -36,7 +36,7 @@ Upload: `POST` with `Content-Type: text/csv`, `Authorization: Bearer <DEVICE_TOK
 
 `custom_pcb/` is a passive carrier board, 38.74 × 114.47 mm. `production/bikesensor.zip` was re-plotted from the current `.kicad_pcb` on 2026-09-17 and is what was ordered on 2026-09-22, so any change to the `.kicad_pcb` now means a respin.
 
-**J1/J2 were routed against a SuperMini pinout that does not exist.** The real module pinout is in `custom_pcb/PIN_VERIFICATION.md`. Firmware absorbs the SPI/I2C/UART mismatch, but `BATTERY_ADC` lands on GPIO9 (no ADC, BOOT strap) and needs a bodge wire to GPIO3. The board's `GPIO_8`/`GPIO_9` net names are wrong (they are IO3/IO4). Read that file before touching the board.
+**J1/J2 were routed against a SuperMini pinout that does not exist.** The real module pinout is in `custom_pcb/PIN_VERIFICATION.md`. Firmware absorbs the SPI/I2C/UART mismatch, but `BATTERY_ADC` lands on GPIO9 (no ADC, BOOT strap) and needs a bodge wire to GPIO3. The board's `GPIO_8`/`GPIO_9` net names are wrong (they are IO3/IO4). J1/J2 are also mirrored: the module only fits **face down** (5V in J1.1, USB-C at the top edge); face up puts supplies on signal pins. Read that file before touching the board.
 
 KiCad is not installed on this machine, so DRC cannot be run here. Connectivity can still be checked
 by parsing the `.kicad_pcb` directly — the netlist is authoritative, the schematic's generic

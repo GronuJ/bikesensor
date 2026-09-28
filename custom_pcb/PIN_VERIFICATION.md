@@ -26,8 +26,9 @@ footprint and symbol (pad 8 = 5V and pad 9 = IO5 share the same end, rows 15.24 
 The same labels are printed on the module itself.
 
 J1.1–J1.3 are `+5V, GND, +3V3`, so J1 is row A and J1.1 is the USB end. J2.1 sits directly across from
-J1.1, so it is IO5 — this holds whether the module is seated face up or face down, because 5V and IO5
-are at the same end of the module. The board's `GPIO_9`/`GPIO_8` net names came from a pinout that
+J1.1, so it is IO5. **This only works with the module face down** (see "Mount the module face down"
+below): J1 is on the left of the carrier and J2 on the right, which is the mirror image of the module
+seen from its component side. The board's `GPIO_9`/`GPIO_8` net names came from a pinout that
 does not exist; the copper actually does this:
 
 | Conn.pin | Net (silkscreen) | SuperMini pin | Hand-wired prototype used | Carrier firmware |
@@ -78,13 +79,95 @@ carrier build already reads the battery on GPIO3.
 If you would rather skip it: still clip leg 5, and leave R1 unfitted. The logger works;
 `battery_pct` in the CSV is meaningless (IO3 floats).
 
-### Seat the module the right way round
+### Mount the module face down
 
-The module's **5V pin goes into J1.1** (square pad, next to the `+5V`/`GND`/`3V3` silkscreen). Rotated
-180°, the module's 5V pin would sit on `GPS_RX` and its IO pins on the supply rails. Before powering
-up, check that the labels printed on the module match row A/row B above. Jost confirmed on
-2026-09-22 that the module he ordered (AliExpress "ESP32 C3 SuperMini Development Board") has this
-pin order, so the mapping above applies to it.
+This is the standard assembly for this board revision, which is the one in use. J1/J2 are the
+**mirror image** of the SuperMini seen face up (checked 2026-09-28 against the `.kicad_pcb` and the
+fabricated board; the fab matches the design file). An earlier version of this file said either face
+works; it does not.
+
+The module goes in **face down**: chip, BOOT/RST buttons and USB-C toward the carrier, USB-C at the
+board's top edge, the module's **5V pin in J1.1** (square pad, next to the `+5V`/`GND`/`3V3`
+silkscreen). That is exactly the pin map in the table above and the carrier firmware's PIN MAP, so no
+firmware change is needed.
+
+Seen from its component side with USB-C at the top, the module is:
+
+```
+         [USB-C]
+ IO5  o           o  5V
+ IO6  o           o  GND
+ IO7  o           o  3V3
+ IO8  o           o  IO4
+ IO9  o           o  IO3
+ IO10 o           o  IO2
+ IO20 o           o  IO1
+ IO21 o           o  IO0
+       [antenna]
+```
+
+Face down flips left and right, putting the 5V column over J1 on the left.
+
+**Never power the module face up, in either rotation.** Both put a supply pin onto a signal net, which
+risks the module and the breakouts; no firmware change can undo it:
+
+| Pad | Carrier net (silkscreen) | Face down, USB at top (correct) | Face up, USB at top | Face up, USB at bottom |
+| --- | --- | --- | --- | --- |
+| J1.1 | `+5V` (5V) | 5V | IO5 ✗ | IO0 ✗ |
+| J1.2 | `GND` (GND) | GND | IO6 ✗ | IO1 ✗ |
+| J1.3 | `+3V3` (3V3) | 3V3 | IO7 ✗ | IO2 ✗ |
+| J1.4 | `GPIO_9` (IO9) | IO4 (label wrong, unused) | IO8 | IO3 |
+| J1.5 | `GPIO_8` (IO8) | IO3 (label wrong, bodge target) | IO9 | IO4 |
+| J1.6 | `I2C_SCL` (SCL) | IO2 | IO10 | 3V3 ✗ |
+| J1.7 | `I2C_SDA` (SDA) | IO1 | IO20 | GND ✗ |
+| J1.8 | `SPI_MISO` (MISO) | IO0 | IO21 | 5V ✗ |
+| J2.1 | `SPI_SCK` (SCK) | IO5 | 5V ✗ | IO21 |
+| J2.2 | `SPI_MOSI` (MOSI) | IO6 | GND ✗ | IO20 |
+| J2.3 | `SPI_CS` (CS) | IO7 | 3V3 ✗ | IO10 |
+| J2.4 | `GPS_TX` (GTX) | IO8 | IO4 | IO9 |
+| J2.5 | `BATTERY_ADC` (ADC) | IO9 (clip leg 5 + bodge) | IO3 | IO8 |
+| J2.6 | `UART_TX_DEBUG` (DTX) | IO10 | IO2 | IO7 |
+| J2.7 | `UART_RX_DEBUG` (DRX) | IO20 | IO1 | IO6 |
+| J2.8 | `GPS_RX` (GRX) | IO21 | IO0 | IO5 |
+
+✗ = a supply pin meets a signal net or another supply.
+
+Jost confirmed on 2026-09-22 that the module he ordered (AliExpress "ESP32 C3 SuperMini Development
+Board") has the pin order above; its printed labels (5V / G / 3.3 on one column, 21 and 0 at the
+antenna end) match.
+
+### Assembly notes
+
+- **Solder the module's male header strips with the pins on the component side**: the black plastic
+  spacer sits on the chip side and the pins stick out of it; solder on the plain back. Soldered the
+  usual way (pins out of the back), the module cannot be seated correctly.
+- **Clip J2 leg 5 and fit the J2.5 → J1.5 bodge wire** exactly as described above; face down is the
+  orientation that bodge was written for.
+- **BOOT and RST are unreachable while the module is seated.** Normal uploads over native USB do not
+  need them. If a bad flash ever needs download mode, pull the module out of its sockets, hold BOOT
+  while plugging in USB, and flash it off the board.
+- **USB-C still reaches the board edge** and stays pluggable; the port sits a few millimetres lower and
+  upside down, which USB-C does not care about. **Check the height of the enclosure's USB-C opening**
+  before printing it.
+- **Antenna:** it faces the carrier's bottom-layer ground pour, roughly 8–10 mm away (about 11 mm face
+  up). Expect a small range loss; it only has to reach home Wi-Fi when parked.
+- **Onboard LED and module labels are hidden.** The carrier firmware does not use the LED anyway.
+- **Clearance:** nothing on the carrier sits under the module's footprint (C1, R2 and C3 are outside
+  it).
+
+A future respin with a real SuperMini footprint could let the module go face up again; none is planned.
+
+### The other headers
+
+All are single-row, so they cannot be mirrored the way J1/J2 are; the silkscreen only tells you which
+way the breakout faces.
+
+| Header | Pads 1→n (net) | Breakout's own order | Note |
+| --- | --- | --- | --- |
+| J3 IMU | 3V3, GND, SCL, SDA, XDA, XCL, AD0, INT | GY-521: VCC GND SCL SDA XDA XCL AD0 INT | Matches; VCC goes on the `3V3` end |
+| J4 SD | GND, 3V3, MISO, MOSI, SCK, CS | Common 6-pin SD: GND VCC MISO MOSI SCK CS | Matches; see "Which MicroSD breakout?" below |
+| J5 GPS | 5V, GTX, GRX, GND | GY-NEO6MV2: VCC RX TX GND | TX/RX order does not matter, firmware auto-detects |
+| J6/J7 shield | J6 unconnected; J7.7 GND, J7.8 → SW1 (5V) | D1 mini: G and 5V are the last two of the TX row | **Inferred** to seat face up (J7 on the right, 5V at the bottom). Not checked against the actual shield: **confirm its G and 5V pins line up with J7.7/J7.8 before soldering** |
 
 ### Strapping pins at reset, as actually wired
 
@@ -132,7 +215,7 @@ Derived from the footprints in `bikesensor_pcb.kicad_pcb`, not from memory.
 
 | Qty | Ref | Part | Footprint / note |
 | --- | --- | --- | --- |
-| 1 | — | ESP32-C3 SuperMini | seats across J1/J2, rows 15.24 mm (600 mil) apart, **5V pin in J1.1** |
+| 1 | — | ESP32-C3 SuperMini | seats across J1/J2 **face down**, rows 15.24 mm (600 mil) apart, **5V pin in J1.1**; header pins soldered on the component side |
 | 1 | — | GY-521 (MPU-6050) | J3. **Supplies the I2C pull-ups** — the carrier has none |
 | 1 | — | GY-NEO6MV2 GPS | J5. Must have its own regulator and 3.3 V logic; it is fed from 5 V with no level shifting |
 | 1 | — | MicroSD SPI breakout | J4. Fed 3.3 V — see "Which MicroSD breakout?" above |
