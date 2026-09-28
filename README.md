@@ -10,7 +10,7 @@ When you ride, the device autonomously records high-frequency (200 Hz) vertical 
 
 ## ⚠️ Project status
 
-* **The custom PCB has been ordered** (38.74 × 114.47 mm, `production/bikesensor.zip`) but not assembled. Its ESP32 headers were routed against the wrong SuperMini pinout, so every signal lands on a different GPIO than the hand-wired prototype used. The default firmware build is remapped to match the board; the battery sense needs one bodge wire during assembly. Details in `custom_pcb/PIN_VERIFICATION.md`.
+* **The custom PCB has been ordered** (38.74 × 114.47 mm, `production/bikesensor.zip`) but not assembled. Its ESP32 headers were routed against the wrong SuperMini pinout, so every signal lands on a different GPIO than the hand-wired prototype used. The default firmware build is remapped to match the board; the battery sense needs one bodge wire during assembly, and the module must be mounted face down. Details in `custom_pcb/PIN_VERIFICATION.md`.
 * **The hardware has never produced a real ride.** Every figure produced so far comes from synthetic signals.
 
 ---
