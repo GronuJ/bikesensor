@@ -79,13 +79,14 @@ carrier build already reads the battery on GPIO3.
 If you would rather skip it: still clip leg 5, and leave R1 unfitted. The logger works;
 `battery_pct` in the CSV is meaningless (IO3 floats).
 
-### Mount the module face down (corrected 2026-09-28)
+### Mount the module face down
 
-An earlier version of this file said the module fits face up or face down. That was wrong. Checked
-on 2026-09-28 against the `.kicad_pcb` and the fabricated board (its silkscreen matches the design
-file, so the fab did nothing wrong): J1/J2 are the **mirror image** of the SuperMini seen face up.
+This is the standard assembly for this board revision, which is the one in use. J1/J2 are the
+**mirror image** of the SuperMini seen face up (checked 2026-09-28 against the `.kicad_pcb` and the
+fabricated board; the fab matches the design file). An earlier version of this file said either face
+works; it does not.
 
-The module fits **only face down**: chip, BOOT/RST buttons and USB-C toward the carrier, USB-C at the
+The module goes in **face down**: chip, BOOT/RST buttons and USB-C toward the carrier, USB-C at the
 board's top edge, the module's **5V pin in J1.1** (square pad, next to the `+5V`/`GND`/`3V3`
 silkscreen). That is exactly the pin map in the table above and the carrier firmware's PIN MAP, so no
 firmware change is needed.
@@ -135,7 +136,7 @@ Jost confirmed on 2026-09-22 that the module he ordered (AliExpress "ESP32 C3 Su
 Board") has the pin order above; its printed labels (5V / G / 3.3 on one column, 21 and 0 at the
 antenna end) match.
 
-### Assembly notes for face-down mounting
+### Assembly notes
 
 - **Solder the module's male header strips with the pins on the component side**: the black plastic
   spacer sits on the chip side and the pins stick out of it; solder on the plain back. Soldered the
@@ -153,6 +154,8 @@ antenna end) match.
 - **Onboard LED and module labels are hidden.** The carrier firmware does not use the LED anyway.
 - **Clearance:** nothing on the carrier sits under the module's footprint (C1, R2 and C3 are outside
   it).
+
+A future respin with a real SuperMini footprint could let the module go face up again; none is planned.
 
 ### The other headers
 
@@ -253,7 +256,7 @@ most prototype fabs. Upload `production/bikesensor.zip`.
 ## Before the respin
 
 Replace the two generic sockets with a real SuperMini symbol and footprint (the mrtnvgr library above
-has both, and it fixes the mirroring so the module can go face up with BOOT/RST reachable), re-derive the netlist, and diff it against the firmware constants. Keeping the carrier
+has both), re-derive the netlist, and diff it against the firmware constants. Keeping the carrier
 firmware map avoids re-routing most nets; the minimum respin change is moving `BATTERY_ADC` from
 J2.5 (IO9) to J1.5 or J1.4 (IO3/IO4) and putting the divider downstream of SW1 (H3). Once the symbol
 is real, this file becomes unnecessary, which is the point.
