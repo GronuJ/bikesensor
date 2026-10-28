@@ -81,10 +81,10 @@ struct OutlineButtonStyle: ButtonStyle {
     var size: CGFloat = 17
 
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration, height: height, size: size, filled: false)
+        StyledLabel(configuration: configuration, height: height, size: size, filled: false)
     }
 
-    fileprivate struct Body: View {
+    struct StyledLabel: View {
         let configuration: Configuration
         let height: CGFloat
         let size: CGFloat
@@ -111,7 +111,7 @@ struct FilledButtonStyle: ButtonStyle {
     var size: CGFloat = 16
 
     func makeBody(configuration: Configuration) -> some View {
-        OutlineButtonStyle.Body(configuration: configuration, height: height, size: size, filled: true)
+        OutlineButtonStyle.StyledLabel(configuration: configuration, height: height, size: size, filled: true)
     }
 }
 
