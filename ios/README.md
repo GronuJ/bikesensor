@@ -67,6 +67,14 @@ The firmware contract (`../CLAUDE.md`), with these differences:
 
 Before upload the phone cuts every row within 300 m, straight line, of the ride's first and last fix sharper than 50 m, and everything before the first or after the last of those fixes. Rows go in whole fix-to-fix intervals, so each kept stretch starts and ends on a fix, and `millis` keeps the gaps the cut leaves. On the synthetic ride from `tools/synth-ride.mjs` the cut keeps 1.1 of 1.7 km.
 
+## Icon and background
+
+The icon is Kiel's main streets in sand around the förde, with one ride along the Kiellinie drawn in white. The home screen has the same streets behind it, faint, as on the kiel.earth landing page; the other screens stay plain black. They were picked from this [proposal](https://claude.ai/artifact/EB2XpuUTs8yHmSgNJUx9gE). Both images are baked from kiel-earth's `public/bike/landing-streets.json` with Pillow, so re-run this when that file changes:
+
+```bash
+python3 ios/tools/bake-art.py ../kiel-earth/public/bike/landing-streets.json
+```
+
 ## Building and checking without a Mac
 
 `.github/workflows/ios.yml` builds the app unsigned on a GitHub macOS runner for every pull request that touches `ios/`. `RideCSV.swift` and `PrivacyTrim.swift` use only Foundation, so they also compile with `swiftc` on Linux to check their output against `dsp.js`.

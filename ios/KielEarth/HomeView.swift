@@ -16,9 +16,7 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             TopBar()
-            Spacer(minLength: 12)
-            Plate().opacity(0.55).frame(maxWidth: .infinity)
-            Spacer(minLength: 12)
+            Spacer()
             VStack(spacing: 10) {
                 if let problem {
                     Text(problem).font(.mono(12)).foregroundStyle(Palette.dim)
@@ -26,6 +24,7 @@ struct HomeView: View {
                 if recorder.mayRecord && recorder.precise {
                     Button("start ride", action: start)
                         .buttonStyle(OutlineButtonStyle())
+                        .background(Palette.ground)
                         .disabled(!recorder.motionAvailable)
                 } else {
                     Button("allow precise location") {
@@ -36,10 +35,27 @@ struct HomeView: View {
                         }
                     }
                     .buttonStyle(OutlineButtonStyle())
+                    .background(Palette.ground)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
         }
+    }
+}
+
+// Kiel's streets in sand, faint, behind the home screen: the landing page's
+// streets, baked by ios/tools/bake-art.py.
+struct Streets: View {
+    var body: some View {
+        GeometryReader { geo in
+            Image("Streets")
+                .resizable()
+                .scaledToFill()
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
     }
 }

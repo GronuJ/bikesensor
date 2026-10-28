@@ -75,6 +75,9 @@ struct RootView: View {
                 }
                 footer
             }
+            .background {
+                if tab == .ride { Streets() }
+            }
         }
     }
 
