@@ -35,6 +35,7 @@ struct RootView: View {
         .task {
             let log = rides
             recorder.onFinished = { id, auto in
+                log.finishing = true
                 Task { await log.finish(id, autoStopped: auto, showSummary: true) }
             }
             recorder.setIdle(scenePhase == .active && setupDone)
@@ -54,7 +55,7 @@ struct RootView: View {
             }
         } else if recorder.isRecording {
             RidingView()
-        } else if rides.finishing {
+        } else if recorder.finishing || rides.finishing {
             VStack(spacing: 0) {
                 TopBar(title: "kiel.earth — surface", showsMap: false) { Text("finishing the ride") }
                 Spacer()

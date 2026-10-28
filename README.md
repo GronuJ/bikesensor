@@ -6,6 +6,8 @@
 
 When you ride, the device autonomously records high-frequency (200 Hz) vertical accelerometer vibrations and sparse (1 Hz) GPS coordinate ticks into unified local CSV log files on the SD card. When you return home, the device connects to your home Wi-Fi and uploads all offline ride CSVs over HTTPS to [kiel.earth](https://kiel.earth), where the rides are stored, processed and mapped. That website lives in its own repository; this one holds the firmware, the carrier PCB and the enclosure.
 
+An iPhone can do the same job: [`ios/`](ios/README.md) is a small SwiftUI app that records a ride with the phone on the handlebar, writes the same CSV and posts it to the same endpoint.
+
 ---
 
 ## ⚠️ Project status

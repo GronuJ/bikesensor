@@ -12,16 +12,19 @@ import UIKit
 @MainActor
 final class Recorder: NSObject, ObservableObject {
     @Published private(set) var rideID: String?
+    // True from the stop until the file is closed and handed on, so the screen
+    // goes straight from riding to the summary.
+    @Published private(set) var finishing = false
     @Published private(set) var tick = RideWriter.Tick()
     @Published private(set) var lastLocation: CLLocation?
-    @Published private(set) var authorization: CLAuthorizationStatus
+    @Published private(set) var authorization = CLAuthorizationStatus.notDetermined
     @Published private(set) var precise = true
     @Published private(set) var distanceM = 0.0
     @Published private(set) var leftStartZoneAtS: Double?
 
     var isRecording: Bool { rideID != nil }
     var mayRecord: Bool { authorization == .authorizedWhenInUse || authorization == .authorizedAlways }
-    let motionAvailable: Bool
+    var motionAvailable: Bool { motion.isAccelerometerAvailable }
 
     // Called with the ride id once the file is closed, and whether the ride
     // stopped by itself.
@@ -45,9 +48,8 @@ final class Recorder: NSObject, ObservableObject {
     private var idle = false
 
     override init() {
-        motionAvailable = motion.isAccelerometerAvailable
-        authorization = location.authorizationStatus
         super.init()
+        authorization = location.authorizationStatus
         motionQueue.underlyingQueue = queue
         motionQueue.maxConcurrentOperationCount = 1
         location.delegate = self
@@ -109,9 +111,13 @@ final class Recorder: NSObject, ObservableObject {
         if !idle { location.stopUpdatingLocation() }
         rideID = nil
         writer = nil
+        finishing = true
         queue.async {
             w.finish()
-            Task { @MainActor [weak self] in self?.onFinished?(id, automatically) }
+            Task { @MainActor [weak self] in
+                self?.onFinished?(id, automatically)
+                self?.finishing = false
+            }
         }
     }
 

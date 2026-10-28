@@ -24,5 +24,14 @@ jobs:
             -scheme KielEarth \
             -configuration Debug \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             -quiet
+      # Background recording depends on these keys reaching the app's Info.plist.
+      - name: Check the built Info.plist
+        run: |
+          plist=build/Build/Products/Debug-iphoneos/KielEarth.app/Info.plist
+          plutil -p "$plist"
+          test "$(plutil -extract UIBackgroundModes.0 raw "$plist")" = location
+          plutil -extract NSLocationWhenInUseUsageDescription raw "$plist"
+          plutil -extract CFBundleIdentifier raw "$plist"

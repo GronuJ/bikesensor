@@ -37,7 +37,7 @@ final class RideLog: ObservableObject {
 
     @Published private(set) var rides: [Ride] = []   // newest first
     @Published private(set) var sending: Set<String> = []
-    @Published private(set) var finishing = false
+    @Published var finishing = false
     @Published var summary: Summary?
 
     static let ingestURL = URL(string: "https://kiel.earth/api/bike/ingest")!
@@ -89,6 +89,9 @@ final class RideLog: ObservableObject {
     // was just stopped; a ride recovered after a crash goes straight to the list.
     func finish(_ id: String, autoStopped: Bool, showSummary: Bool) async {
         if showSummary { finishing = true }
+        // A ride that stops by itself usually does so with the phone locked.
+        let task = BackgroundTask("finish \(id)")
+        defer { task.end() }
         let raw = rawURL(id), out = sendURL(id)
         let result = await Task.detached(priority: .userInitiated) {
             try? PrivacyTrim.run(raw: raw, out: out)
