@@ -1,35 +1,26 @@
 import SwiftUI
 
-// While a ride records. The design's "road now" class strip and its black
-// screen are left out: the site does the classifying, and the phone can simply
-// be locked.
+// While a ride records: time, distance, speed, the road under the wheel, and
+// stop. The phone can simply be locked.
 struct RidingView: View {
     @EnvironmentObject private var recorder: Recorder
 
     private var t: RideWriter.Tick { recorder.tick }
 
-    private var gps: String {
-        guard let loc = recorder.lastLocation, -loc.timestamp.timeIntervalSinceNow < 5 else { return "no fix" }
-        return "±\(Int(loc.horizontalAccuracy.rounded())) m"
+    private var hasFix: Bool {
+        guard let loc = recorder.lastLocation else { return false }
+        return -loc.timestamp.timeIntervalSinceNow < 5
     }
 
     private var speed: String {
-        guard let loc = recorder.lastLocation, loc.speed >= 0, -loc.timestamp.timeIntervalSinceNow < 5 else { return "–" }
+        guard let loc = recorder.lastLocation, loc.speed >= 0, hasFix else { return "–" }
         return String(format: "%.1f", loc.speed * 3.6)
-    }
-
-    private var rate: String { t.rateHz > 0 ? String(Int(t.rateHz.rounded())) : "–" }
-
-    private var privateZone: String {
-        guard let s = recorder.leftStartZoneAtS else { return "inside the start zone" }
-        return "start zone left at \(Fmt.duration(s))"
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(title: "kiel.earth — surface", showsMap: false) {
-                Text("\(Text("●").foregroundStyle(Palette.red)) recording · \(rate) hz · gps \(gps)")
-            }
+            TopBar(showsMap: false,
+                   status: Text("\(Text("●").foregroundStyle(Palette.red)) \(hasFix ? "recording" : "no gps")"))
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(Fmt.clock(Double(t.millis) / 1000)).font(.mono(54)).lineLimit(1).minimumScaleFactor(0.5)
@@ -40,30 +31,9 @@ struct RidingView: View {
                     .font(.mono(18))
                 }
                 Spacer(minLength: 12)
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("road now").foregroundStyle(Palette.dim)
-                        Spacer()
-                        Text(String(format: "%.3f g rms", t.rmsG))
-                    }
-                    .font(.mono(13))
-                    Trace(values: t.trace).frame(height: 110)
-                    Text("vertical acceleration, last 2 s").font(.mono(12)).foregroundStyle(Palette.dim)
-                }
+                Trace(values: t.trace).frame(height: 110)
                 Spacer(minLength: 12)
-                VStack(alignment: .leading, spacing: 2) {
-                    InfoRow("private", privateZone)
-                    InfoRow("samples", Fmt.count(t.samples))
-                    InfoRow("gps fixes", Fmt.count(t.fixes))
-                }
-                Spacer(minLength: 12)
-                VStack(spacing: 4) {
-                    HoldToStop { recorder.stop() }
-                    Text("lock the phone, it keeps recording")
-                        .font(.mono(13))
-                        .foregroundStyle(Palette.dim)
-                        .frame(minHeight: 44)
-                }
+                HoldToStop { recorder.stop() }
             }
             .padding(.horizontal, 20)
             .padding(.top, 22)

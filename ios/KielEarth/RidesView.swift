@@ -1,19 +1,13 @@
 import SwiftUI
 
-// Every ride on the phone and whether kiel.earth has it. Swipe left to delete.
+// Every ride on the phone and whether kiel.earth has it. Swipe left to delete;
+// a sent ride goes by itself after 7 days.
 struct RidesView: View {
     @EnvironmentObject private var rides: RideLog
 
-    private var status: String {
-        if RideLog.uploadToken == nil { return "no upload key in this build" }
-        let n = rides.toSend.count
-        if n > 0 { return "\(n) to send" }
-        return rides.rides.isEmpty ? "no rides yet" : "all sent"
-    }
-
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(title: "kiel.earth — rides") { Text(status) }
+            TopBar()
             if rides.rides.isEmpty {
                 Spacer()
             } else {
@@ -32,19 +26,13 @@ struct RidesView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
-            VStack(spacing: 6) {
-                if rides.toSend.count > 1 {
-                    Button("send all now") { Task { await rides.sendAll() } }
-                        .buttonStyle(OutlineButtonStyle(height: 52, size: 15))
-                        .disabled(!rides.sending.isEmpty)
-                }
-                Text("a ride is deleted here 7 days after kiel.earth confirms it")
-                    .font(.mono(12))
-                    .foregroundStyle(Palette.dim)
-                    .multilineTextAlignment(.center)
+            if rides.toSend.count > 1 {
+                Button("send all") { Task { await rides.sendAll() } }
+                    .buttonStyle(OutlineButtonStyle(height: 52, size: 15))
+                    .disabled(!rides.sending.isEmpty)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
         }
     }
 }
@@ -55,38 +43,34 @@ private struct RideRow: View {
 
     private var sending: Bool { rides.sending.contains(ride.id) }
 
-    private var state: (String, Color) {
+    // What the row says when there is no send button.
+    private var state: String {
         switch ride.state {
-        case .recording: return ("finishing…", Palette.dim)
-        case .empty: return ("nothing to send", Palette.dim)
-        case .sent: return ("sent", Palette.dim)
-        case .ready: return (sending ? "sending…" : "not sent", Palette.ink)
+        case .recording: return "…"
+        case .empty: return "–"
+        case .sent: return "sent"
+        case .ready: return "sending…"
         }
     }
 
-    private var meta: String {
-        var parts = ["\(Fmt.km(ride.distanceM)) km", Fmt.minutes(ride.durationS)]
-        if ride.state != .empty { parts.append(Fmt.mb(ride.sendBytes)) }
-        return parts.joined(separator: " · ")
-    }
+    private var meta: String { "\(Fmt.km(ride.distanceM)) km · \(Fmt.minutes(ride.durationS))" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(Fmt.when(ride.startedAt))
-                Spacer()
-                Text(state.0).font(.mono(13)).foregroundStyle(state.1)
-            }
-            Text(meta).font(.mono(12)).foregroundStyle(Palette.dim)
-            if ride.state == .ready && !sending {
-                HStack(spacing: 12) {
-                    Text(ride.lastError ?? "").font(.mono(12)).foregroundStyle(Palette.dim)
-                    Spacer()
-                    Button(ride.lastError == nil ? "send" : "retry") { Task { await rides.send(ride.id) } }
-                        .buttonStyle(OutlineButtonStyle(height: 44, size: 13))
-                        .frame(width: 96)
+                Text(meta).font(.mono(12)).foregroundStyle(Palette.dim)
+                if let e = ride.lastError, ride.state == .ready, !sending {
+                    Text(e).font(.mono(12)).foregroundStyle(Palette.dim)
                 }
-                .padding(.top, 4)
+            }
+            Spacer()
+            if ride.state == .ready && !sending {
+                Button(ride.lastError == nil ? "send" : "retry") { Task { await rides.send(ride.id) } }
+                    .buttonStyle(OutlineButtonStyle(height: 44, size: 13))
+                    .frame(width: 96)
+            } else {
+                Text(state).font(.mono(13)).foregroundStyle(Palette.dim)
             }
         }
     }

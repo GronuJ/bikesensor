@@ -20,7 +20,6 @@ final class Recorder: NSObject, ObservableObject {
     @Published private(set) var authorization = CLAuthorizationStatus.notDetermined
     @Published private(set) var precise = true
     @Published private(set) var distanceM = 0.0
-    @Published private(set) var leftStartZoneAtS: Double?
 
     var isRecording: Bool { rideID != nil }
     var mayRecord: Bool { authorization == .authorizedWhenInUse || authorization == .authorizedAlways }
@@ -43,7 +42,6 @@ final class Recorder: NSObject, ObservableObject {
     private var session: CLBackgroundActivitySession?
     private var startedAt = Date()
     private var lastMovedAt = Date()
-    private var startAnchor: CLLocation?
     private var lastCounted: CLLocation?
     private var idle = false
 
@@ -85,8 +83,6 @@ final class Recorder: NSObject, ObservableObject {
         writer = w
         tick = RideWriter.Tick()
         distanceM = 0
-        leftStartZoneAtS = nil
-        startAnchor = nil
         lastCounted = nil
         startedAt = Date()
         lastMovedAt = startedAt
@@ -159,13 +155,6 @@ final class Recorder: NSObject, ObservableObject {
                                             loc.coordinate.latitude, loc.coordinate.longitude)
                 }
                 lastCounted = loc
-            }
-            if startAnchor == nil, loc.horizontalAccuracy <= PrivacyTrim.anchorMaxAccuracyM {
-                startAnchor = loc
-            } else if let a = startAnchor, leftStartZoneAtS == nil,
-                      Geo.metres(a.coordinate.latitude, a.coordinate.longitude,
-                                 loc.coordinate.latitude, loc.coordinate.longitude) >= PrivacyTrim.radiusM {
-                leftStartZoneAtS = Double(tick.millis) / 1000
             }
         }
     }

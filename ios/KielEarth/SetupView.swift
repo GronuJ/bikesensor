@@ -20,16 +20,12 @@ struct SetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(title: "kiel.earth — surface", showsMap: false) { Text("first start") }
+            TopBar(showsMap: false)
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("setup").font(.mono(12)).foregroundStyle(Palette.dim)
-                    Text("two things,\nonce.").font(.mono(26))
-                }
                 Spacer(minLength: 20)
                 VStack(alignment: .leading, spacing: 0) {
                     step(1, "share", state: consented ? "sharing" : "not yet", on: consented,
-                         text: "your rides go to kiel.earth/surface: how the road shakes, and where. no account, no name. everything within 300 m of where a ride starts or ends is cut on this phone, so home never leaves it.") {
+                         text: "rides go to kiel.earth/surface, without the 300 m around start and end.") {
                         HStack(spacing: 0) {
                             Toggle("share my rides", isOn: $consented).toggleStyle(CheckboxStyle())
                             Text(" · ").foregroundStyle(Palette.dim)
@@ -40,7 +36,7 @@ struct SetupView: View {
                         .font(.mono(13))
                     }
                     step(2, "location", state: locationState, on: recorder.mayRecord && recorder.precise,
-                         text: "allow precise location, so a ride is placed on the right street and keeps recording with the screen off.") {
+                         text: "precise, so rides land on the right street.") {
                         switch recorder.authorization {
                         case .notDetermined:
                             Button("allow") { recorder.requestPermission() }

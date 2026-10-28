@@ -10,8 +10,6 @@ final class RideWriter: @unchecked Sendable {
         var samples = 0
         var fixes = 0
         var millis: Int64 = 0
-        var rateHz = 0.0
-        var rmsG = 0.0
         var trace: [Float] = []   // vertical acceleration in g, oldest first
     }
 
@@ -49,7 +47,6 @@ final class RideWriter: @unchecked Sendable {
     private var gravity: (x: Double, y: Double, z: Double)?
     private var trace = [Float](repeating: 0, count: 200)
     private var traceAt = 0
-    private var recentMillis = [Int64](repeating: 0, count: 101)
 
     init(appendingTo file: URL) throws {
         handle = try FileHandle(forWritingTo: file)
@@ -90,7 +87,6 @@ final class RideWriter: @unchecked Sendable {
         }
 
         traceVertical(x, y, z)
-        recentMillis[tick.samples % recentMillis.count] = millis
         if tick.samples % 10 == 0 { sendTick() }
     }
 
@@ -146,13 +142,6 @@ final class RideWriter: @unchecked Sendable {
     private func sendTick() {
         var t = tick
         t.trace = Array(trace[traceAt...] + trace[..<traceAt])
-        let mean = t.trace.reduce(0, +) / Float(t.trace.count)
-        t.rmsG = Double(sqrt(t.trace.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Float(t.trace.count)))
-        if t.samples > recentMillis.count {
-            // Rate over the last 100 samples.
-            let then = recentMillis[(t.samples + 1) % recentMillis.count]
-            if t.millis > then { t.rateHz = 100_000 / Double(t.millis - then) }
-        }
         onTick?(t)
     }
 }

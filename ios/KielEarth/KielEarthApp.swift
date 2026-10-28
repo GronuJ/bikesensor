@@ -57,7 +57,7 @@ struct RootView: View {
             RidingView()
         } else if recorder.finishing || rides.finishing {
             VStack(spacing: 0) {
-                TopBar(title: "kiel.earth — surface", showsMap: false) { Text("finishing the ride") }
+                TopBar(showsMap: false)
                 Spacer()
                 ProgressView().tint(Palette.dim)
                 Spacer()

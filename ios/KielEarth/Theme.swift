@@ -26,53 +26,27 @@ struct Rule: View {
     var body: some View { Rectangle().fill(Palette.rule).frame(height: 1) }
 }
 
-// The site's top bar: page title, the map link, one status line.
-struct TopBar<Status: View>: View {
-    let title: String
+// The site's top bar: the name, and on the right either a status or the map link.
+struct TopBar: View {
     var showsMap = true
-    @ViewBuilder let status: Status
+    var status: Text?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(title)
-                Spacer()
-                if showsMap {
-                    Link(destination: URL(string: "https://kiel.earth/surface")!) {
-                        Text("map ↗").foregroundStyle(Palette.dim)
-                    }
+        HStack {
+            Text("kiel.earth")
+            Spacer()
+            if let status {
+                status.foregroundStyle(Palette.dim)
+            } else if showsMap {
+                Link(destination: URL(string: "https://kiel.earth/surface")!) {
+                    Text("map ↗").foregroundStyle(Palette.dim)
                 }
             }
-            .font(.mono(13))
-            .frame(minHeight: 44)
-            status
-                .font(.mono(12))
-                .foregroundStyle(Palette.dim)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 10)
-        }
-        .padding(.horizontal, 20)
-        .overlay(alignment: .bottom) { Rule() }
-    }
-}
-
-// One <dt>/<dd> line of the design's info lists.
-struct InfoRow: View {
-    let term: String
-    let value: String
-
-    init(_ term: String, _ value: String) {
-        self.term = term
-        self.value = value
-    }
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(term).foregroundStyle(Palette.dim).frame(width: 88, alignment: .leading)
-            Text(value)
-            Spacer(minLength: 0)
         }
         .font(.mono(13))
+        .frame(minHeight: 44)
+        .padding(.horizontal, 20)
+        .overlay(alignment: .bottom) { Rule() }
     }
 }
 
@@ -147,23 +121,8 @@ enum Fmt {
 
     static func minutes(_ seconds: Double) -> String { "\(max(1, Int((seconds / 60).rounded()))) min" }
 
-    static func mb(_ bytes: Int) -> String { String(format: "%.1f mb", Double(bytes) / 1_000_000) }
-
-    static func count(_ n: Int) -> String {
-        n.formatted(.number.locale(Locale(identifier: "en_US")))
-    }
-
     // "28 oct, 08:51"
     static func when(_ date: Date) -> String { whenFormatter.string(from: date).lowercased() }
-
-    // "today 08:51", "yesterday 17:40", "26 oct 18:12"
-    static func relative(_ date: Date) -> String {
-        let cal = Calendar.current
-        let time = timeFormatter.string(from: date)
-        if cal.isDateInToday(date) { return "today \(time)" }
-        if cal.isDateInYesterday(date) { return "yesterday \(time)" }
-        return dayFormatter.string(from: date).lowercased() + " " + time
-    }
 
     private static func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
@@ -173,6 +132,4 @@ enum Fmt {
     }
 
     private static let whenFormatter = formatter("d MMM, HH:mm")
-    private static let timeFormatter = formatter("HH:mm")
-    private static let dayFormatter = formatter("d MMM")
 }

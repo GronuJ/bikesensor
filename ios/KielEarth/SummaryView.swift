@@ -1,8 +1,7 @@
 import SwiftUI
 
-// Right after a ride: the track with the cut parts dashed, the numbers, and
-// send / later / discard. The design's on-phone surface preview is left out;
-// the site does the processing.
+// Right after a ride: the track with the cut parts dashed, three numbers, and
+// send / later / discard.
 struct SummaryView: View {
     let summary: RideLog.Summary
     let close: (_ showRides: Bool) -> Void
@@ -13,18 +12,9 @@ struct SummaryView: View {
     private var ride: Ride? { rides.ride(summary.id) }
     private var sending: Bool { rides.sending.contains(summary.id) }
 
-    private var stateLine: String {
-        guard let r = ride else { return "" }
-        switch r.state {
-        case .sent: return "sent"
-        case .empty: return "nothing to send"
-        default: return sending ? "sending…" : "not sent yet"
-        }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(title: "kiel.earth — surface") { Text("ride \(summary.id) · \(stateLine)") }
+            TopBar()
             if let r = ride {
                 content(r)
             } else {
@@ -36,51 +26,27 @@ struct SummaryView: View {
                 rides.remove(summary.id)
                 close(false)
             }
-        } message: {
-            Text("it is deleted from this phone and never sent.")
         }
     }
 
     private func content(_ r: Ride) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                TrackView(points: summary.track)
-                    .frame(height: 230)
-                    .overlay(Rectangle().stroke(Palette.rule, lineWidth: 1))
-                Text("dashed: within 300 m of start and end, cut before sending")
-                    .font(.mono(12))
-                    .foregroundStyle(Palette.dim)
+            TrackView(points: summary.track)
+                .frame(height: 230)
+                .overlay(Rectangle().stroke(Palette.rule, lineWidth: 1))
+            Spacer(minLength: 12)
+            HStack(spacing: 12) {
+                stat("distance", "\(Fmt.km(r.distanceM)) km")
+                stat("time", Fmt.duration(r.durationS))
+                stat("avg", r.durationS > 0 ? String(format: "%.1f km/h", r.distanceM / r.durationS * 3.6) : "–")
             }
             Spacer(minLength: 12)
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                GridRow {
-                    stat("distance", "\(Fmt.km(r.distanceM)) km")
-                    stat("time", Fmt.duration(r.durationS))
-                    stat("avg", r.durationS > 0 ? String(format: "%.1f km/h", r.distanceM / r.durationS * 3.6) : "–")
-                }
-                GridRow {
-                    stat("samples", Fmt.count(r.samples))
-                    stat("gps fixes", Fmt.count(r.fixes))
-                    stat("to send", r.state == .empty ? "–" : Fmt.mb(r.sendBytes))
-                }
+            // Said only when the ride can't simply be sent.
+            if r.state == .empty {
+                Text("nothing to send").font(.mono(12)).foregroundStyle(Palette.dim)
+            } else if let e = r.lastError, r.state != .sent {
+                Text(e).font(.mono(12)).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 12)
-            VStack(alignment: .leading, spacing: 4) {
-                if r.autoStopped {
-                    Text("stopped by itself after 3 min standing still.")
-                }
-                if r.state == .empty {
-                    Text("nothing is left outside the 300 m around start and end, so there is nothing to send.")
-                } else {
-                    Text("\(Fmt.km(r.keptDistanceM)) km of it goes to kiel.earth.")
-                }
-                if let e = r.lastError, r.state != .sent {
-                    Text(e).foregroundStyle(Palette.ink)
-                }
-            }
-            .font(.mono(12))
-            .foregroundStyle(Palette.dim)
-            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             buttons(r)
         }
@@ -92,7 +58,7 @@ struct SummaryView: View {
     @ViewBuilder private func buttons(_ r: Ride) -> some View {
         VStack(spacing: 8) {
             if r.state == .ready {
-                Button(sending ? "sending…" : "send to kiel.earth") {
+                Button(sending ? "sending…" : "send") {
                     Task {
                         await rides.send(summary.id)
                         if rides.ride(summary.id)?.state == .sent { close(true) }

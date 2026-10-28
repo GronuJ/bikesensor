@@ -4,7 +4,7 @@ Records a bike ride on an iPhone and sends it to [kiel.earth/surface](https://ki
 
 - **start ride** starts GPS and the accelerometer at 100 Hz. Recording carries on with the phone locked.
 - **hold to stop** ends the ride after a one-second press. A ride also stops by itself after 3 minutes standing still.
-- **The summary** shows the track, with everything within 300 m of the start and end cut on the phone. Choose send to kiel.earth, later, or discard.
+- **The summary** shows the track, with everything within 300 m of the start and end cut on the phone (dashed). Choose send, later, or discard. The app shows no instructions; they are here.
 - **rides** lists every ride with send and retry; swipe left to delete. A ride is deleted from the phone 7 days after kiel.earth confirms it.
 
 ## Install on your iPhone
@@ -47,7 +47,7 @@ The app stays on the phone and you can unplug. With a free Apple ID it stops ope
 1. On first start, tick **share my rides** and allow location. Keep **Precise Location** on, or every fix is kilometres wide.
 2. Clamp the phone firmly to the stem or bar. In a pocket or bag the body damps the road away.
 3. Press **start ride**, lock the phone and ride. A blue location pill in the status bar shows it is still recording.
-4. Hold **hold to stop**, or stand still for 3 minutes. Press **send to kiel.earth** on the summary.
+4. Hold **hold to stop**, or stand still for 3 minutes. Press **send** on the summary.
 5. The ride shows up in `/admin#surface` as pending, with an id like `ip-261028_081500`. Process and publish it as you would a box ride.
 
 Both files of every ride are in the Files app under **On My iPhone › kiel.earth › rides**: `<id>.csv` is the full recording, home included, which never leaves the phone, and `<id>.send.csv` is what was uploaded. AirDrop one to the Mac and run `node tools/check-ride.mjs <file>` in kiel-earth to see how `dsp.js` reads it.
