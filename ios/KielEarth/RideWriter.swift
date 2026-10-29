@@ -1,8 +1,8 @@
 import CoreMotion
 import Foundation
 
-// Everything that happens at 100 Hz: one accelerometer sample becomes one CSV
-// row, and each GPS fix is put on the row nearest to it in time. Every method
+// Everything that happens at the accelerometer's rate (100 or 200 Hz, see
+// Recorder.sampleHz): one sample becomes one CSV row, and each GPS fix is put on the row nearest to it in time. Every method
 // runs on the recorder's serial queue; nothing here touches the main actor.
 final class RideWriter: @unchecked Sendable {
     // What the riding screen shows, sent ten times a second.
@@ -41,12 +41,15 @@ final class RideWriter: @unchecked Sendable {
     // seen over the first two seconds, when delivery latency is a few ms.
     private var t0: TimeInterval?
     private var wallOffset = TimeInterval.infinity
-    private var offsetSamples = 0
 
     private var tick = Tick()
+    private var lastTickMillis: Int64 = 0
     private var gravity: (x: Double, y: Double, z: Double)?
+    private var lastSampleT: TimeInterval?
+    // Two seconds at 100 points a second, whatever rate the samples come at.
     private var trace = [Float](repeating: 0, count: 200)
     private var traceAt = 0
+    private var lastTraceT = -TimeInterval.infinity
 
     init(appendingTo file: URL) throws {
         handle = try FileHandle(forWritingTo: file)
@@ -57,9 +60,8 @@ final class RideWriter: @unchecked Sendable {
         guard !closed else { return }
         let now = Date().timeIntervalSince1970
         if t0 == nil { t0 = data.timestamp }
-        if offsetSamples < 200 {
+        if data.timestamp - t0! < 2 {
             wallOffset = min(wallOffset, now - data.timestamp)
-            offsetSamples += 1
         }
         let millis = Int64(((data.timestamp - t0!) * 1000).rounded())
 
@@ -86,8 +88,11 @@ final class RideWriter: @unchecked Sendable {
             if outRows >= 100 { flush() }
         }
 
-        traceVertical(x, y, z)
-        if tick.samples % 10 == 0 { sendTick() }
+        traceVertical(x, y, z, at: data.timestamp)
+        if millis - lastTickMillis >= 100 {
+            lastTickMillis = millis
+            sendTick()
+        }
     }
 
     func add(_ fix: RideCSV.Fix) {
@@ -128,13 +133,19 @@ final class RideWriter: @unchecked Sendable {
 
     // The riding screen's trace: acceleration along gravity, gravity estimated
     // with the same 0.5 Hz low-pass dsp.js uses (verticalAccel).
-    private func traceVertical(_ x: Double, _ y: Double, _ z: Double) {
-        let alpha = exp(-2 * Double.pi * 0.5 / 100)
+    private func traceVertical(_ x: Double, _ y: Double, _ z: Double, at t: TimeInterval) {
+        let dt = min(max(t - (lastSampleT ?? t), 0), 0.1)
+        lastSampleT = t
+        let alpha = exp(-2 * Double.pi * 0.5 * dt)
         var g = gravity ?? (x, y, z)
         g = (alpha * g.x + (1 - alpha) * x, alpha * g.y + (1 - alpha) * y, alpha * g.z + (1 - alpha) * z)
         gravity = g
         let mag = max(sqrt(g.x * g.x + g.y * g.y + g.z * g.z), 1e-6)
         let v = (x * g.x + y * g.y + z * g.z) / mag - mag
+        // 8 ms rather than 10, so that at 100 Hz no sample is skipped for
+        // arriving a little early, and at 200 Hz every other one is.
+        guard t - lastTraceT >= 0.008 else { return }
+        lastTraceT = t
         trace[traceAt] = Float(v)
         traceAt = (traceAt + 1) % trace.count
     }

@@ -2,7 +2,7 @@
 
 Records a bike ride on an iPhone and sends it to [kiel.earth/surface](https://kiel.earth/surface) in the same CSV the bikesensor box writes. SwiftUI, iOS 17 or later, laid out for the iPhone 16 Pro. It follows the approved [design](https://claude.ai/artifact/4mpHdzmq9NQkzxC2qCirXv), cut down to what a ride needs.
 
-- **start ride** starts GPS and the accelerometer at 100 Hz. Recording carries on with the phone locked.
+- **start ride** starts GPS and the accelerometer. Recording carries on with the phone locked.
 - **hold to stop** ends the ride after a one-second press. A ride also stops by itself after 3 minutes standing still.
 - **The summary** shows the track, with everything within 100 m of the start and end cut on the phone (dashed). Choose send, later, or discard. The app shows no instructions; they are here.
 - **rides** lists every ride with send and retry; swipe left to delete. A ride is deleted from the phone 7 days after kiel.earth confirms it.
@@ -57,7 +57,7 @@ Both files of every ride are in the Files app under **On My iPhone › kiel.eart
 The firmware contract (`../CLAUDE.md`), with these differences:
 
 - **Columns:** a trailing `h_acc_m`, the fix's horizontal accuracy in metres. `dsp.js` reads columns by name and ignores it.
-- **Rate:** one row per accelerometer sample at 100 Hz, the most iOS gives an app; the box writes 200 Hz. A dropped sample leaves a 20 ms gap, which `dsp.js` splits on as it does on a firmware stall.
+- **Rate:** one row per accelerometer sample. Apple promises 100 Hz on an iPhone; since 2026-10-29 the app asks for 200 Hz (`Recorder.sampleHz`), as a test of what the phone delivers. `millis` comes from the sensor's own timestamps, so `node tools/check-ride.mjs` in kiel-earth prints the rate a ride got, and `dsp.js` takes the rate from the file. The box writes 200 Hz. A dropped sample leaves a gap of two sample periods, which `dsp.js` splits on as it does on a firmware stall.
 - **ax, ay, az:** acceleration in g × 8192 with gravity kept, so they read as MPU-6050 counts. The sign is flipped to the MPU's convention (+1 g on the axis pointing up). Values beyond ±4 g are not clipped.
 - **millis:** time since the first sample, from the sensor's own timestamps.
 - **GPS fields:** written on the row nearest the fix's own timestamp; rows are held back 2 s so a late fix still lands in the right place. `gps_time` is UTC with milliseconds; `speed_kmh` is empty when iOS has no valid speed.

@@ -7,7 +7,7 @@ import UIKit
 // Recording with the screen locked rests on location: with the location
 // background mode, allowsBackgroundLocationUpdates and updates started while
 // the app is open, iOS keeps the app running, and Core Motion keeps delivering
-// at 100 Hz with it. When-in-use permission is enough for that; the blue
+// samples with it. When-in-use permission is enough for that; the blue
 // location pill shows while a ride runs in the background.
 @MainActor
 final class Recorder: NSObject, ObservableObject {
@@ -29,7 +29,11 @@ final class Recorder: NSObject, ObservableObject {
     // stopped by itself.
     var onFinished: ((String, Bool) -> Void)?
 
-    static let sampleHz = 100.0
+    // A test since 2026-10-29: Apple promises 100 Hz on an iPhone, and the app
+    // asks for 200 to see what the phone delivers. Each row's millis comes from
+    // the sensor's own timestamp, so a ride's file shows the rate it got, and
+    // dsp.js reads the rate from the file. Nothing else assumes a rate.
+    static let sampleHz = 200.0
     // Like the firmware: a ride ends after three still minutes.
     static let stillStopS = 180.0
     static let movingKmh = 6.0

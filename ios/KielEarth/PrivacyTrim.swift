@@ -13,9 +13,10 @@ struct TrimResult: Sendable {
     var distanceM = 0.0
     var keptDistanceM = 0.0
     var keptRows = 0
+    var keptS = 0.0
     var track: [TrackPoint] = []
 
-    var sendable: Bool { keptRows >= PrivacyTrim.minKeptRows }
+    var sendable: Bool { keptS >= PrivacyTrim.minKeptS }
 }
 
 // Cuts every part of a ride within 100 m of where it started or ended, on the
@@ -38,8 +39,9 @@ struct TrimResult: Sendable {
 enum PrivacyTrim {
     static let radiusM = 100.0
     static let anchorMaxAccuracyM = 50.0
-    // Under about 10 s of data at 100 Hz the site cannot make a cell of it.
-    static let minKeptRows = 1000
+    // Under about 10 s of data the site cannot make a cell of it. Counted in
+    // time, not rows, because the rate may be 100 or 200 Hz.
+    static let minKeptS = 10.0
     // The summary drawing does not need every fix.
     static let trackStepM = 10.0
 
@@ -105,6 +107,7 @@ enum PrivacyTrim {
 
         // Pass 2: keep a row when the fixes on both sides of it are outside.
         var next = 0   // the first fix at or after row i
+        var lastKept: (row: Int, millis: Double)?
         for i in 1..<lines.count {
             while next < fixes.count && fixes[next].row < i { next += 1 }
             guard next < fixes.count else { break }
@@ -113,6 +116,10 @@ enum PrivacyTrim {
             out += lines[i]
             out += "\n"
             result.keptRows += 1
+            if let ms = Double(field(lines[i], cMillis)) {
+                if let l = lastKept, l.row == i - 1 { result.keptS += max(0, ms - l.millis) / 1000 }
+                lastKept = (i, ms)
+            }
         }
 
         // Distance, whole and kept, between consecutive usable fixes.
