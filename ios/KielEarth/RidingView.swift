@@ -4,6 +4,7 @@ import SwiftUI
 // stop. The phone can simply be locked.
 struct RidingView: View {
     @EnvironmentObject private var recorder: Recorder
+    @Environment(\.scenePhase) private var scenePhase
 
     private var t: RideWriter.Tick { recorder.tick }
 
@@ -31,7 +32,7 @@ struct RidingView: View {
                     .font(.mono(18))
                 }
                 Spacer(minLength: 12)
-                Trace(values: t.trace).frame(height: 110)
+                Trace(values: t.trace, range: t.traceRange).frame(height: 110)
                 Spacer(minLength: 12)
                 HoldToStop { recorder.stop() }
             }
@@ -39,12 +40,16 @@ struct RidingView: View {
             .padding(.top, 22)
             .padding(.bottom, 20)
         }
+        .onAppear { recorder.setLiveTrace(scenePhase == .active) }
+        .onChange(of: scenePhase) { _, phase in recorder.setLiveTrace(phase == .active) }
     }
 }
 
-// Vertical acceleration over the last two seconds; ±0.25 g fills the height.
+// Vertical acceleration over the last two seconds. The height spans ±range g
+// (set in RideWriter.sendTick): ±0.25 g on a calm road, wider when it shakes more.
 struct Trace: View {
     let values: [Float]
+    let range: Float
 
     var body: some View {
         Canvas { ctx, size in
@@ -55,7 +60,7 @@ struct Trace: View {
             ctx.stroke(axis, with: .color(Palette.rule), lineWidth: 1)
             guard values.count > 1 else { return }
             let step = size.width / CGFloat(values.count - 1)
-            let scale = size.height / 0.5
+            let scale = size.height / 2 / CGFloat(max(range, 0.01))
             var line = Path()
             for (i, v) in values.enumerated() {
                 let y = min(max(mid - CGFloat(v) * scale, 2), size.height - 2)

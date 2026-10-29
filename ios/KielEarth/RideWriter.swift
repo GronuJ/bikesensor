@@ -2,18 +2,24 @@ import CoreMotion
 import Foundation
 
 // Everything that happens at the accelerometer's rate (100 or 200 Hz, see
-// Recorder.sampleHz): one sample becomes one CSV row, and each GPS fix is put on the row nearest to it in time. Every method
-// runs on the recorder's serial queue; nothing here touches the main actor.
+// Recorder.sampleHz): one sample becomes one CSV row, and each GPS fix is put
+// on the row nearest to it in time. Every method runs on the recorder's serial
+// queue; nothing here touches the main actor.
 final class RideWriter: @unchecked Sendable {
-    // What the riding screen shows, sent ten times a second.
+    // What the riding screen shows.
     struct Tick: Sendable {
         var samples = 0
         var fixes = 0
         var millis: Int64 = 0
         var trace: [Float] = []   // vertical acceleration in g, oldest first
+        var traceRange: Float = RideWriter.traceFloorG   // the trace's half-height in g
     }
 
     var onTick: (@Sendable (Tick) -> Void)?
+    // While the riding screen is in front, a tick goes out with every new trace
+    // point, 100 a second, so the line scrolls smoothly. Otherwise ten a second
+    // is plenty: the auto-stop check is all that runs on them.
+    var live = false
 
     private struct Row {
         var millis: Int64
@@ -44,6 +50,11 @@ final class RideWriter: @unchecked Sendable {
 
     private var tick = Tick()
     private var lastTickMillis: Int64 = 0
+    // The trace's half-height: never under ±0.25 g, at once wide enough for the
+    // largest swing on screen, and easing back over about half a second once
+    // that swing has scrolled off. The line never runs into the edge.
+    static let traceFloorG: Float = 0.25
+    private var traceRange = RideWriter.traceFloorG
     private var gravity: (x: Double, y: Double, z: Double)?
     private var lastSampleT: TimeInterval?
     // Two seconds at 100 points a second, whatever rate the samples come at.
@@ -88,10 +99,10 @@ final class RideWriter: @unchecked Sendable {
             if outRows >= 100 { flush() }
         }
 
-        traceVertical(x, y, z, at: data.timestamp)
-        if millis - lastTickMillis >= 100 {
+        let newPoint = traceVertical(x, y, z, at: data.timestamp)
+        if (live && newPoint) || millis - lastTickMillis >= 100 {
+            sendTick(dtS: Float(millis - lastTickMillis) / 1000)
             lastTickMillis = millis
-            sendTick()
         }
     }
 
@@ -133,7 +144,8 @@ final class RideWriter: @unchecked Sendable {
 
     // The riding screen's trace: acceleration along gravity, gravity estimated
     // with the same 0.5 Hz low-pass dsp.js uses (verticalAccel).
-    private func traceVertical(_ x: Double, _ y: Double, _ z: Double, at t: TimeInterval) {
+    // True when it added a point to the trace.
+    private func traceVertical(_ x: Double, _ y: Double, _ z: Double, at t: TimeInterval) -> Bool {
         let dt = min(max(t - (lastSampleT ?? t), 0), 0.1)
         lastSampleT = t
         let alpha = exp(-2 * Double.pi * 0.5 * dt)
@@ -144,15 +156,20 @@ final class RideWriter: @unchecked Sendable {
         let v = (x * g.x + y * g.y + z * g.z) / mag - mag
         // 8 ms rather than 10, so that at 100 Hz no sample is skipped for
         // arriving a little early, and at 200 Hz every other one is.
-        guard t - lastTraceT >= 0.008 else { return }
+        guard t - lastTraceT >= 0.008 else { return false }
         lastTraceT = t
         trace[traceAt] = Float(v)
         traceAt = (traceAt + 1) % trace.count
+        return true
     }
 
-    private func sendTick() {
+    private func sendTick(dtS: Float) {
         var t = tick
         t.trace = Array(trace[traceAt...] + trace[..<traceAt])
+        let fit = (t.trace.lazy.map { abs($0) }.max() ?? 0) * 1.1
+        traceRange = fit >= traceRange ? fit : traceRange + (fit - traceRange) * (1 - exp(-max(dtS, 0) / 0.5))
+        traceRange = max(traceRange, Self.traceFloorG)
+        t.traceRange = traceRange
         onTick?(t)
     }
 }

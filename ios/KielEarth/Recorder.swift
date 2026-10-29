@@ -102,6 +102,12 @@ final class Recorder: NSObject, ObservableObject {
         rideID = id
     }
 
+    // The riding screen says when it is in front, for a smoother trace then.
+    func setLiveTrace(_ on: Bool) {
+        guard let w = writer else { return }
+        queue.async { w.live = on }
+    }
+
     func stop(automatically: Bool = false) {
         guard let id = rideID, let w = writer else { return }
         motion.stopAccelerometerUpdates()
