@@ -17,7 +17,7 @@ struct KielEarthApp: App {
 }
 
 struct RootView: View {
-    enum Tab { case ride, rides }
+    enum Tab { case ride, rides, map }
 
     @EnvironmentObject private var recorder: Recorder
     @EnvironmentObject private var rides: RideLog
@@ -57,7 +57,7 @@ struct RootView: View {
             RidingView()
         } else if recorder.finishing || rides.finishing {
             VStack(spacing: 0) {
-                TopBar(showsMap: false)
+                TopBar()
                 Spacer()
                 ProgressView().tint(Palette.dim)
                 Spacer()
@@ -72,6 +72,7 @@ struct RootView: View {
                 switch tab {
                 case .ride: HomeView(start: startRide)
                 case .rides: RidesView()
+                case .map: MapView()
                 }
                 footer
             }
@@ -86,6 +87,7 @@ struct RootView: View {
         return HStack(spacing: 20) {
             tabButton("ride", .ride)
             tabButton(n > 0 ? "rides · \(n)" : "rides", .rides)
+            tabButton("map", .map)
             Spacer()
         }
         .font(.mono(13))

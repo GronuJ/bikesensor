@@ -20,7 +20,7 @@ struct SetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(showsMap: false)
+            TopBar()
             VStack(alignment: .leading, spacing: 0) {
                 Spacer(minLength: 20)
                 VStack(alignment: .leading, spacing: 0) {

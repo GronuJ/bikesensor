@@ -6,6 +6,7 @@ Records a bike ride on an iPhone and sends it to [kiel.earth/surface](https://ki
 - **hold to stop** ends the ride after a one-second press. A ride also stops by itself after 3 minutes standing still.
 - **The summary** shows the track, with everything within 100 m of the start and end cut on the phone (dashed). Choose send, later, or discard. The app shows no instructions; they are here.
 - **rides** lists every ride with send and retry; swipe left to delete. A ride is deleted from the phone 7 days after kiel.earth confirms it.
+- **map** is kiel.earth/surface inside the app, in the site's app mode (`/surface?app`: map and legend only). The app draws nothing of its own there, so it shows whatever the site shows. It reloads when the tab opens after five minutes away; a link out of the page opens in Safari.
 
 ## Install on your iPhone
 

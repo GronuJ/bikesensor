@@ -20,8 +20,7 @@ struct RidingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(showsMap: false,
-                   status: Text("\(Text("●").foregroundStyle(Palette.red)) \(hasFix ? "recording" : "no gps")"))
+            TopBar(status: Text("\(Text("●").foregroundStyle(Palette.red)) \(hasFix ? "recording" : "no gps")"))
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(Fmt.clock(Double(t.millis) / 1000)).font(.mono(54)).lineLimit(1).minimumScaleFactor(0.5)

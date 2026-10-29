@@ -26,9 +26,8 @@ struct Rule: View {
     var body: some View { Rectangle().fill(Palette.rule).frame(height: 1) }
 }
 
-// The site's top bar: the name, and on the right either a status or the map link.
+// The site's top bar: the name, and on the right a status if there is one.
 struct TopBar: View {
-    var showsMap = true
     var status: Text?
 
     var body: some View {
@@ -37,10 +36,6 @@ struct TopBar: View {
             Spacer()
             if let status {
                 status.foregroundStyle(Palette.dim)
-            } else if showsMap {
-                Link(destination: URL(string: "https://kiel.earth/surface")!) {
-                    Text("map ↗").foregroundStyle(Palette.dim)
-                }
             }
         }
         .font(.mono(13))
