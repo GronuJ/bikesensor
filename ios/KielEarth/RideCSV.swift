@@ -67,7 +67,7 @@ enum RideCSV {
 
 enum Geo {
     // Straight-line metres, the same flat-earth approximation dsp.js uses for
-    // its 300 m privacy radius, so the phone and the site agree on the zone.
+    // its privacy radius, so the phone and the site agree on the zone.
     static func metres(_ aLat: Double, _ aLon: Double, _ bLat: Double, _ bLon: Double) -> Double {
         let kx = cos(aLat * .pi / 180) * 111_320
         return hypot((bLon - aLon) * kx, (bLat - aLat) * 111_320)

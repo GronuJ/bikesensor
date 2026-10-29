@@ -18,7 +18,7 @@ struct TrimResult: Sendable {
     var sendable: Bool { keptRows >= PrivacyTrim.minKeptRows }
 }
 
-// Cuts every part of a ride within 300 m of where it started or ended, on the
+// Cuts every part of a ride within 100 m of where it started or ended, on the
 // phone, before anything is uploaded, so the stretch around home never leaves it.
 //
 //   - Start and end are the ride's first and last fix sharper than 50 m. A
@@ -36,7 +36,7 @@ struct TrimResult: Sendable {
 //
 // millis is left untouched, gaps included.
 enum PrivacyTrim {
-    static let radiusM = 300.0
+    static let radiusM = 100.0
     static let anchorMaxAccuracyM = 50.0
     // Under about 10 s of data at 100 Hz the site cannot make a cell of it.
     static let minKeptRows = 1000

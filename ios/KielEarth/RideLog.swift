@@ -5,7 +5,7 @@ struct Ride: Codable, Identifiable, Equatable {
     enum State: String, Codable {
         case recording   // only seen if the app was stopped mid-ride; finished on next launch
         case ready       // trimmed, waiting to be sent
-        case empty       // nothing left outside the 300 m zones
+        case empty       // nothing left outside the 100 m zones
         case sent
     }
 

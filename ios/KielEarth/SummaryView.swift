@@ -132,6 +132,6 @@ struct TrackView: View {
             }
         }
         .accessibilityElement()
-        .accessibilityLabel("the ride's track; the parts within 300 m of start and end are dashed")
+        .accessibilityLabel("the ride's track; the parts within 100 m of start and end are dashed")
     }
 }

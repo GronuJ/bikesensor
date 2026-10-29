@@ -25,7 +25,7 @@ struct SetupView: View {
                 Spacer(minLength: 20)
                 VStack(alignment: .leading, spacing: 0) {
                     step(1, "share", state: consented ? "sharing" : "not yet", on: consented,
-                         text: "rides go to kiel.earth/surface, without the 300 m around start and end.") {
+                         text: "rides go to kiel.earth/surface, without the 100 m around start and end.") {
                         HStack(spacing: 0) {
                             Toggle("share my rides", isOn: $consented).toggleStyle(CheckboxStyle())
                             Text(" · ").foregroundStyle(Palette.dim)

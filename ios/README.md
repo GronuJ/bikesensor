@@ -4,7 +4,7 @@ Records a bike ride on an iPhone and sends it to [kiel.earth/surface](https://ki
 
 - **start ride** starts GPS and the accelerometer at 100 Hz. Recording carries on with the phone locked.
 - **hold to stop** ends the ride after a one-second press. A ride also stops by itself after 3 minutes standing still.
-- **The summary** shows the track, with everything within 300 m of the start and end cut on the phone (dashed). Choose send, later, or discard. The app shows no instructions; they are here.
+- **The summary** shows the track, with everything within 100 m of the start and end cut on the phone (dashed). Choose send, later, or discard. The app shows no instructions; they are here.
 - **rides** lists every ride with send and retry; swipe left to delete. A ride is deleted from the phone 7 days after kiel.earth confirms it.
 
 ## Install on your iPhone
@@ -65,7 +65,7 @@ The firmware contract (`../CLAUDE.md`), with these differences:
 
 ### The privacy cut
 
-Before upload the phone cuts every row within 300 m, straight line, of the ride's first and last fix sharper than 50 m, and everything before the first or after the last of those fixes. Rows go in whole fix-to-fix intervals, so each kept stretch starts and ends on a fix, and `millis` keeps the gaps the cut leaves. On the synthetic ride from `tools/synth-ride.mjs` the cut keeps 1.1 of 1.7 km.
+Before upload the phone cuts every row within 100 m, straight line, of the ride's first and last fix sharper than 50 m, and everything before the first or after the last of those fixes. Rows go in whole fix-to-fix intervals, so each kept stretch starts and ends on a fix, and `millis` keeps the gaps the cut leaves. On the synthetic ride from `tools/synth-ride.mjs` the cut keeps 1.5 of 1.7 km.
 
 ## Icon and background
 
