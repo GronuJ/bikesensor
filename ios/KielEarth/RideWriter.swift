@@ -50,9 +50,12 @@ final class RideWriter: @unchecked Sendable {
 
     private var tick = Tick()
     private var lastTickMillis: Int64 = 0
-    // The trace's half-height: never under ±0.25 g, at once wide enough for the
-    // largest swing on screen, and easing back over about half a second once
-    // that swing has scrolled off. The line never runs into the edge.
+    // The trace's half-height follows how hard the road shakes, not its single
+    // biggest hit: 1.6 times the 95th percentile of the swing on screen, never
+    // under ±0.25 g. It widens within a quarter second and narrows over three,
+    // so a pothole does not flatten the rest of the trace and the scale does
+    // not pump as hits scroll past. The few points beyond it are drawn
+    // squeezed toward the edge (Trace).
     static let traceFloorG: Float = 0.25
     private var traceRange = RideWriter.traceFloorG
     private var gravity: (x: Double, y: Double, z: Double)?
@@ -166,8 +169,10 @@ final class RideWriter: @unchecked Sendable {
     private func sendTick(dtS: Float) {
         var t = tick
         t.trace = Array(trace[traceAt...] + trace[..<traceAt])
-        let fit = (t.trace.lazy.map { abs($0) }.max() ?? 0) * 1.1
-        traceRange = fit >= traceRange ? fit : traceRange + (fit - traceRange) * (1 - exp(-max(dtS, 0) / 0.5))
+        let swings = t.trace.map { abs($0) }.sorted()
+        let fit = max(swings[swings.count * 95 / 100] * 1.6, Self.traceFloorG)
+        let tau: Float = fit > traceRange ? 0.25 : 3
+        traceRange += (fit - traceRange) * (1 - exp(-max(dtS, 0) / tau))
         traceRange = max(traceRange, Self.traceFloorG)
         t.traceRange = traceRange
         onTick?(t)

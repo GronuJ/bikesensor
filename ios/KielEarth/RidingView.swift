@@ -45,7 +45,9 @@ struct RidingView: View {
 }
 
 // Vertical acceleration over the last two seconds. The height spans ±range g
-// (set in RideWriter.sendTick): ±0.25 g on a calm road, wider when it shakes more.
+// (set in RideWriter.sendTick): ±0.25 g on a calm road, wider when it shakes
+// more. Each point goes through tanh, nearly straight for most of the trace,
+// so the rare hit beyond the range bends toward the edge instead of being cut.
 struct Trace: View {
     let values: [Float]
     let range: Float
@@ -59,10 +61,11 @@ struct Trace: View {
             ctx.stroke(axis, with: .color(Palette.rule), lineWidth: 1)
             guard values.count > 1 else { return }
             let step = size.width / CGFloat(values.count - 1)
-            let scale = size.height / 2 / CGFloat(max(range, 0.01))
+            let half = mid - 2
+            let r = Double(max(range, 0.01))
             var line = Path()
             for (i, v) in values.enumerated() {
-                let y = min(max(mid - CGFloat(v) * scale, 2), size.height - 2)
+                let y = mid - CGFloat(tanh(Double(v) / r)) * half
                 let p = CGPoint(x: CGFloat(i) * step, y: y)
                 if i == 0 { line.move(to: p) } else { line.addLine(to: p) }
             }
