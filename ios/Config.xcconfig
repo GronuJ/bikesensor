@@ -1,0 +1,14 @@
+// Build settings shared by Debug and Release.
+//
+// Anything private goes in Local.xcconfig next to this file, which git ignores
+// (copy Local.example.xcconfig). It is included last so its values win, and
+// the build still works without it: the app then just cannot upload.
+
+PRODUCT_BUNDLE_IDENTIFIER = earth.kiel.surface
+
+// The bearer token kiel.earth's /api/bike/ingest checks: the same value as
+// DEVICE_TOKEN in the Cloudflare dashboard and in the firmware's
+// private_credentials.h. Empty here on purpose.
+KE_UPLOAD_TOKEN =
+
+#include? "Local.xcconfig"

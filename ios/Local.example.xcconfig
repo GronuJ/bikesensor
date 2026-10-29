@@ -1,0 +1,9 @@
+// Copy to Local.xcconfig (git ignores it) and fill in.
+//
+// xcconfig reads // as the start of a comment, so a token must not contain
+// two slashes in a row. `openssl rand -hex 32` makes one that is safe.
+
+KE_UPLOAD_TOKEN = paste-your-DEVICE_TOKEN-here
+
+// Only if Xcode says the bundle identifier is not available for your team:
+// PRODUCT_BUNDLE_IDENTIFIER = earth.kiel.surface.yourname

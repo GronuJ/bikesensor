@@ -1,0 +1,37 @@
+# Builds the iPhone app on a GitHub macOS runner, unsigned, so a change that
+# does not compile shows up here instead of on the Mac it is installed from.
+name: ios
+
+on:
+  pull_request:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Xcode version
+        run: xcodebuild -version
+      - name: Build for iPhone, unsigned
+        run: |
+          xcodebuild build \
+            -project ios/KielEarth.xcodeproj \
+            -scheme KielEarth \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
+      # Background recording depends on these keys reaching the app's Info.plist.
+      - name: Check the built Info.plist
+        run: |
+          plist=build/Build/Products/Debug-iphoneos/KielEarth.app/Info.plist
+          plutil -p "$plist"
+          test "$(plutil -extract UIBackgroundModes.0 raw "$plist")" = location
+          plutil -extract NSLocationWhenInUseUsageDescription raw "$plist"
+          plutil -extract CFBundleIdentifier raw "$plist"

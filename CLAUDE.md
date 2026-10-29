@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `bikesensor` is a hardware + software pipeline for geo-tagged bike vibration / road-quality mapping. An ESP32-C3 SuperMini logs 200 Hz accelerometer data and 1 Hz GPS to a MicroSD card during a ride; on arriving home it joins Wi-Fi and uploads the CSVs over HTTPS.
 
-The device posts each ride to `https://kiel.earth/api/bike/ingest` (see `SERVER_HOST` in `bikesensor.ino`). Storage, processing and the map live in the separate `kiel-earth` repo, not here. This repo is only the firmware, the carrier PCB and the enclosure. The original Raspberry Pi backend (FastAPI + Streamlit + Python DSP) was removed; recover it from git history (last present in `f155d5b`) if the old DSP is ever needed as a reference.
+The device posts each ride to `https://kiel.earth/api/bike/ingest` (see `SERVER_HOST` in `bikesensor.ino`). Storage, processing and the map live in the separate `kiel-earth` repo, not here. This repo holds the firmware, the carrier PCB, the enclosure, and `ios/`, a SwiftUI iPhone app that records rides in the same CSV and posts them to the same endpoint (see `ios/README.md`). The original Raspberry Pi backend (FastAPI + Streamlit + Python DSP) was removed; recover it from git history (last present in `f155d5b`) if the old DSP is ever needed as a reference.
 
 ## Commands
 
@@ -17,6 +17,8 @@ pio run -d firmware              # build
 pio run -d firmware -t upload    # flash
 pio device monitor -b 115200     # serial console (native USB-CDC)
 ```
+
+iPhone app: Xcode is not installed here and cannot be. `.github/workflows/ios.yml` builds `ios/KielEarth.xcodeproj` unsigned on a macOS runner for every PR touching `ios/`, so push and read that job's log to find compile errors. The project uses Xcode 16+ synchronized folders: any file put in `ios/KielEarth/` is in the target, with no `project.pbxproj` edit. `RideCSV.swift` and `PrivacyTrim.swift` are Foundation-only and compile with a Linux `swiftc` to check their output against kiel-earth's `node tools/check-ride.mjs`. The upload token lives in the gitignored `ios/Local.xcconfig`.
 
 `platformio.ini` sets `src_dir = bikesensor` so the `.ino` compiles in place. The default env uses the carrier PCB's pin map; `-e handwired` (`-DBIKESENSOR_HANDWIRED`) builds the original prototype's map. The two differ on every signal — see the PIN MAP block in `bikesensor.ino`. `firmware/diagnostic/diagnostic.ino` is a separate standalone bring-up sketch — it is *not* in the PlatformIO build; swap `src_dir` to compile it. It currently only walks the SD card through 400 kHz / 1 MHz / 4 MHz on the carrier's SPI pins. Earlier revisions probed I2C and discriminated a stuck bus from a solder short; recover them from git history (`1953733` and its parents) if a future build misbehaves.
 
@@ -29,6 +31,8 @@ millis,ax,ay,az,lat,lon,ele,speed_kmh,battery_pct,gps_time
 ```
 
 `millis` is relative to ESP32 boot. Most rows are 200 Hz accel only, with the last six fields empty. Once per GPS second a row also carries `battery_pct` and `gps_time`; `lat,lon,ele,speed_kmh` are filled only while the fix is current (under 1.5 s old) and are empty otherwise, never repeated. `battery_pct` is empty when the reading is not a plausible cell (the carrier without its bodge wire). `gps_time` is empty until the GPS has a date. If the IMU fails a read, no 200 Hz row is written (a gap in `millis`), and a GPS-second row is written with `ax,ay,az` empty. A file is one ride: it starts after a few seconds of motion and ends after three still minutes, so it may end with up to three minutes of standing data; rides under a minute of motion are deleted on the device. `ax/ay/az` are **raw MPU-6050 counts** — the ±4 g scale (`1/8192`) is applied downstream, not on-device, so changing the firmware's `ACCEL_CONFIG` register means changing the scale in `kiel-earth` too.
+
+The iPhone app writes the same columns plus a trailing `h_acc_m` (fix accuracy in metres), at whatever rate the phone delivers (it asks for 200 Hz as a test; Apple promises 100), with ax/ay/az as g × 8192 including gravity, and ride ids prefixed `ip-`. It cuts everything within 100 m of a ride's start and end before upload, and kiel-earth does not cut `ip-` rides again. Details in `ios/README.md`.
 
 Upload: `POST` with `Content-Type: text/csv`, `Authorization: Bearer <DEVICE_TOKEN>` and `X-Ride-Id` (the filename without extension). The firmware deletes a file from the SD card only on a 2xx, so the server must store the raw bytes before acknowledging, and must treat a repeated `X-Ride-Id` as a duplicate rather than a new ride.
 
